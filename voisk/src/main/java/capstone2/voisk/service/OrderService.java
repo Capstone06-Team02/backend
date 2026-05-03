@@ -2,6 +2,7 @@ package capstone2.voisk.service;
 
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
+import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.repository.OrderSessionRepository;
 import lombok.RequiredArgsConstructor;
@@ -10,47 +11,32 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 public class OrderService {
 
     private final OrderSessionRepository sessionRepository;
+    private final LlmSlotFillerService llmSlotFillerService;
 
-    // ── Intent 키워드 ────────────────────────────────────────────────────────
-    private static final List<String> ORDER_KW   = List.of("주세요", "줘", "먹을게", "일반", "특식");
-    private static final List<String> CONFIRM_KW = List.of("맞아요", "맞아", "네", "응", "확인");
-    private static final List<String> CANCEL_KW  = List.of("아니", "취소", "다시");
-
-    // "N개" 패턴 — 단위('개') 필수로 숫자 오인식 방지
-    private static final Pattern QTY_DIGIT = Pattern.compile("(\\d+)\\s*개");
-    private static final Map<String, Integer> KO_QTY = Map.of(
-            "하나", 1, "둘", 2, "셋", 3, "넷", 4, "다섯", 5
-    );
-
-    // 메뉴별 가격 (추후 확장 용이)
     public static final Map<String, Integer> MENU_PRICE = Map.of(
             "일반 메뉴", 8000,
             "특식 메뉴", 12000
     );
-
-    // ── 진입점 ────────────────────────────────────────────────────────────────
 
     public OrderResponse process(OrderRequest request) {
         String sid      = resolveId(request.getSessionId());
         OrderSession session = sessionRepository.findById(sid)
                 .orElseGet(() -> sessionRepository.save(new OrderSession(sid)));
         String text     = request.getInput() == null ? "" : request.getInput().trim();
-        String intent   = classifyIntent(text);
 
-        // DONE 상태 → 자동 리셋 후 새 주문
         if (session.getPhase() == OrderSession.Phase.DONE) {
             session.reset();
         }
 
-        // CANCEL: 단계 무관 즉시 리셋
+        SlotExtractionResult result = llmSlotFillerService.extract(text);
+        String intent = result.intent();
+
         if ("CANCEL".equals(intent)) {
             session.reset();
             sessionRepository.save(session);
@@ -59,7 +45,6 @@ public class OrderService {
                     List.of("일반 메뉴", "특식 메뉴"));
         }
 
-        // CONFIRMING 단계 + CONFIRM → 주문 완료
         if (session.getPhase() == OrderSession.Phase.CONFIRMING && "CONFIRM".equals(intent)) {
             String msg = String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity());
             session.setPhase(OrderSession.Phase.DONE);
@@ -67,8 +52,13 @@ public class OrderService {
             return build(sid, intent, session, msg, List.of());
         }
 
-        // 슬롯 채우기 (intent 무관하게 항상 시도)
-        fillSlots(text, session);
+        // 슬롯 채우기 — write-once, LLM 추출 결과 반영
+        if (session.getMenu() == null && result.menu() != null) {
+            session.setMenu(result.menu());
+        }
+        if (session.getQuantity() == null && result.quantity() != null) {
+            session.setQuantity(result.quantity());
+        }
 
         String msg;
         List<String> qr;
@@ -89,47 +79,10 @@ public class OrderService {
         return build(sid, intent, session, msg, qr);
     }
 
-    // ── Intent 분류 ───────────────────────────────────────────────────────────
-
-    private String classifyIntent(String text) {
-        if (containsAny(text, CANCEL_KW))  return "CANCEL";
-        if (containsAny(text, CONFIRM_KW)) return "CONFIRM";
-        if (containsAny(text, ORDER_KW))   return "ORDER";
-        return "UNKNOWN";
-    }
-
-    // ── 슬롯 채우기 ───────────────────────────────────────────────────────────
-
-    private void fillSlots(String text, OrderSession session) {
-        if (session.getMenu() == null) {
-            if (text.contains("특식"))      session.setMenu("특식 메뉴");
-            else if (text.contains("일반")) session.setMenu("일반 메뉴");
-        }
-        if (session.getQuantity() == null) {
-            session.setQuantity(extractQty(text));
-        }
-    }
-
-    private Integer extractQty(String text) {
-        Matcher m = QTY_DIGIT.matcher(text);
-        if (m.find()) return Integer.parseInt(m.group(1));
-        for (Map.Entry<String, Integer> e : KO_QTY.entrySet()) {
-            if (text.contains(e.getKey())) return e.getValue();
-        }
-        return null;
-    }
-
-    // ── 유틸리티 ─────────────────────────────────────────────────────────────
-
-    // sessionId가 없으면 새 UUID 발급 (클라이언트가 이후 응답의 sessionId를 재사용해야 함)
     private String resolveId(String sessionId) {
         return (sessionId == null || sessionId.isBlank())
                 ? UUID.randomUUID().toString()
                 : sessionId;
-    }
-
-    private boolean containsAny(String text, List<String> keywords) {
-        return keywords.stream().anyMatch(text::contains);
     }
 
     private OrderResponse build(String sid, String intent, OrderSession session, String msg, List<String> qr) {
