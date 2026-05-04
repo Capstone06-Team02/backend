@@ -52,11 +52,11 @@ public class OrderService {
             return build(sid, intent, session, msg, List.of());
         }
 
-        // 슬롯 채우기 — write-once, LLM 추출 결과 반영
-        if (session.getMenu() == null && result.menu() != null) {
+        // 슬롯 채우기 — LLM이 명시적으로 추출한 값은 메뉴·수량 모두 덮어씀(수정 허용)
+        if (result.menu() != null) {
             session.setMenu(result.menu());
         }
-        if (session.getQuantity() == null && result.quantity() != null) {
+        if (result.quantity() != null) {
             session.setQuantity(result.quantity());
         }
 
