@@ -63,7 +63,14 @@ public class OrderService {
             session.setMenu(result.menu());
         }
         if (result.quantity() != null) {
-            session.setQuantity(result.quantity());
+            if (isValidQuantity(result.quantity())) {
+                session.setQuantity(result.quantity());
+            } else {
+                sessionRepository.save(session);
+                return build(sid, intent, session,
+                        "수량은 1개 이상으로 말씀해주세요.",
+                        List.of("1개", "2개", "3개"));
+            }
         }
 
         String msg;
@@ -101,6 +108,10 @@ public class OrderService {
         if (session.getPhase() == OrderSession.Phase.CONFIRMING) return List.of("네", "아니요");
         if (session.getMenu() == null) return List.of("일반 메뉴", "특식 메뉴");
         return List.of("1개", "2개", "3개");
+    }
+
+    private boolean isValidQuantity(int quantity) {
+        return quantity >= 1;
     }
 
     private String resolveId(String sessionId) {
