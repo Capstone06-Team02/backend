@@ -69,7 +69,9 @@ public class OrderService {
 
         // 슬롯 채우기 — LLM이 명시적으로 추출한 값은 메뉴·수량 모두 덮어씀(수정 허용)
         if (result.menu() != null) {
-            session.setMenu(result.menu());
+            if (MENU_PRICE.containsKey(result.menu())) {
+                session.setMenu(result.menu());
+            }
         }
         if (result.quantity() != null) {
             if (isValidQuantity(result.quantity())) {
