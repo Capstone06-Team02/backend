@@ -4,6 +4,9 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.UpdateTimestamp;
+
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "order_session")
@@ -25,6 +28,10 @@ public class OrderSession {
     @Enumerated(EnumType.STRING)
     @Column(name = "phase", nullable = false)
     private Phase phase;
+
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
 
     public enum Phase {
         ORDERING, CONFIRMING, DONE
