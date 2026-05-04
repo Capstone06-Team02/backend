@@ -7,6 +7,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestClient;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -97,9 +100,11 @@ class LlmProcessorEvaluationTest {
     static LlmSlotFillerService service;
 
     @BeforeAll
-    static void setUp() {
-
-		String apiKey = geminiProperties.getApiKey();
+    static void setUp() throws IOException {
+        String apiKey = System.getenv("GEMINI_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = readFromDotEnv("GEMINI_API_KEY");
+        }
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.");
         }
@@ -260,5 +265,16 @@ class LlmProcessorEvaluationTest {
         return results.stream()
                 .filter(r -> type.equals(r.tc().type()) && r.intentCorrect())
                 .count();
+    }
+
+    private static String readFromDotEnv(String key) throws IOException {
+        Path envFile = Path.of(System.getProperty("user.dir"), ".env");
+        if (!Files.exists(envFile)) return null;
+        String prefix = key + "=";
+        return Files.lines(envFile)
+                .filter(l -> l.startsWith(prefix))
+                .map(l -> l.substring(prefix.length()).trim())
+                .findFirst()
+                .orElse(null);
     }
 }
