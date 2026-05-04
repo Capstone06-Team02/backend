@@ -54,6 +54,10 @@ public class OrderService {
             return build(sid, intent, session, msg, List.of());
         }
 
+        if ("UNKNOWN".equals(intent)) {
+            return build(sid, intent, session, buildRetryMessage(session), buildRetryQuickReplies(session));
+        }
+
         // 슬롯 채우기 — LLM이 명시적으로 추출한 값은 메뉴·수량 모두 덮어씀(수정 허용)
         if (result.menu() != null) {
             session.setMenu(result.menu());
@@ -79,6 +83,24 @@ public class OrderService {
 
         sessionRepository.save(session);
         return build(sid, intent, session, msg, qr);
+    }
+
+    private String buildRetryMessage(OrderSession session) {
+        String prefix = "잘 이해하지 못했습니다. ";
+        if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+            return prefix + String.format("%s %d개 맞으시죠? 네 또는 아니요로 말씀해주세요.",
+                    session.getMenu(), session.getQuantity());
+        }
+        if (session.getMenu() == null) {
+            return prefix + "일반 메뉴와 특식 메뉴 중 어떤 걸 드릴까요?";
+        }
+        return prefix + "몇 개 드릴까요?";
+    }
+
+    private List<String> buildRetryQuickReplies(OrderSession session) {
+        if (session.getPhase() == OrderSession.Phase.CONFIRMING) return List.of("네", "아니요");
+        if (session.getMenu() == null) return List.of("일반 메뉴", "특식 메뉴");
+        return List.of("1개", "2개", "3개");
     }
 
     private String resolveId(String sessionId) {
