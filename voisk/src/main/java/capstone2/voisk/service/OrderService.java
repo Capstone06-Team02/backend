@@ -40,6 +40,15 @@ public class OrderService {
         String intent = result.intent();
 
         if ("CANCEL".equals(intent)) {
+            if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+                // 확인 단계 거부 → 메뉴는 유지, 수량만 초기화해 재입력 유도
+                session.setQuantity(null);
+                session.setPhase(OrderSession.Phase.ORDERING);
+                sessionRepository.save(session);
+                return build(sid, intent, session,
+                        String.format("%s로 계속하시겠어요? 수량을 다시 말씀해주세요.", session.getMenu()),
+                        List.of("1개", "2개", "3개"));
+            }
             session.reset();
             sessionRepository.save(session);
             return build(sid, intent, session,
