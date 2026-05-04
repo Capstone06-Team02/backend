@@ -85,7 +85,7 @@ public class LlmSlotFillerService {
         boolean cancelMatch  = matchesAny(userInput, CANCEL_KW);
         long intentCount = (orderMatch ? 1 : 0) + (confirmMatch ? 1 : 0) + (cancelMatch ? 1 : 0);
 
-        if (intentCount == 1) {
+        if (intentCount == 1 && !isAmbiguous(orderMatch, confirmMatch, cancelMatch, userInput)) {
             if (cancelMatch)  return new SlotExtractionResult("CANCEL",  null, null, null);
             if (confirmMatch) return new SlotExtractionResult("CONFIRM", null, null, null);
             // ORDER: 키워드로 슬롯 추출
@@ -94,9 +94,10 @@ public class LlmSlotFillerService {
             return new SlotExtractionResult("ORDER", menu, quantity, null);
         }
 
-        // ── Step 2: 키워드 실패 → LLM 폴백 ─────────────────────────────────────
-        FALLBACK_LOG.warn("[KEYWORD_MISS] input=\"{}\" order={} confirm={} cancel={}",
-                userInput, orderMatch, confirmMatch, cancelMatch);
+        // ── Step 2: 키워드 실패 or 애매한 상황 → LLM 호출 ───────────────────────
+        String reason = (intentCount != 1) ? "KEYWORD_MISS" : "AMBIGUOUS";
+        FALLBACK_LOG.warn("[{}] input=\"{}\" order={} confirm={} cancel={}",
+                reason, userInput, orderMatch, confirmMatch, cancelMatch);
 
         SlotExtractionResult llmResult = callGemini(userInput);
 
@@ -104,6 +105,34 @@ public class LlmSlotFillerService {
                 userInput, llmResult.intent(), llmResult.menu(),
                 llmResult.quantity(), llmResult.option());
         return llmResult;
+    }
+
+    /**
+     * 단일 키워드 매칭임에도 LLM 판단이 필요한 애매한 상황을 감지한다.
+     *
+     * - CONFIRM 감지 + 메뉴 키워드·수량 존재: 확인 중 수정 주문 가능성
+     *   예) "네 그런데 일반 하나 더" → CONFIRM이지만 실제로는 ORDER
+     *
+     * - CANCEL 감지 + 메뉴 키워드 존재: 부정 후 정정 주문 가능성
+     *   예) "아니 그거 말고 특식으로" → CANCEL이지만 실제로는 ORDER
+     */
+    private boolean isAmbiguous(boolean orderMatch, boolean confirmMatch, boolean cancelMatch, String input) {
+        if (confirmMatch && (hasMenuKeyword(input) || hasQuantityPattern(input))) return true;
+        if (cancelMatch  && hasMenuKeyword(input)) return true;
+        return false;
+    }
+
+    private boolean hasMenuKeyword(String input) {
+        return NORMAL_MENU_KW.stream().anyMatch(input::contains)
+            || SPECIAL_MENU_KW.stream().anyMatch(input::contains);
+    }
+
+    private boolean hasQuantityPattern(String input) {
+        if (Pattern.compile("(\\d+)\\s*(?:개|명|사람분)").matcher(input).find()) return true;
+        for (Map.Entry<String, Integer> e : KO_NUM_WITH_UNIT.entrySet()) {
+            if (Pattern.compile(e.getKey() + "\\s*(?:개|명|사람분)").matcher(input).find()) return true;
+        }
+        return KO_NUM_STANDALONE.keySet().stream().anyMatch(input::contains);
     }
 
     // ─── 키워드 기반 슬롯 추출 ─────────────────────────────────────────────────
