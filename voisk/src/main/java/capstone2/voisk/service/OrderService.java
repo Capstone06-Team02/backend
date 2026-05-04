@@ -7,6 +7,7 @@ import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.repository.OrderSessionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,7 @@ public class OrderService {
             "특식 메뉴", 12000
     );
 
+    @Transactional
     public OrderResponse process(OrderRequest request) {
         String sid      = resolveId(request.getSessionId());
         OrderSession session = sessionRepository.findById(sid)
