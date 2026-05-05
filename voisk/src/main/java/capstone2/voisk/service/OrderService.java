@@ -36,7 +36,7 @@ public class OrderService {
             session.reset();
         }
 
-        SlotExtractionResult result = llmSlotFillerService.extract(text);
+        SlotExtractionResult result = llmSlotFillerService.extract(text, session);
         String intent = result.intent();
 
         if ("CANCEL".equals(intent)) {

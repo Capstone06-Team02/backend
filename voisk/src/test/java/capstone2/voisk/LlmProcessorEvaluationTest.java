@@ -2,6 +2,7 @@ package capstone2.voisk;
 
 import capstone2.voisk.config.GeminiProperties;
 import capstone2.voisk.dto.SlotExtractionResult;
+import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.service.LlmSlotFillerService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -133,7 +134,7 @@ class LlmProcessorEvaluationTest {
             TestCase tc = TEST_CASES.get(i);
 
             long start = System.currentTimeMillis();
-            SlotExtractionResult result = service.extract(tc.input());
+            SlotExtractionResult result = service.extract(tc.input(), new OrderSession("test"));
             long latencyMs = System.currentTimeMillis() - start;
 
             TestResult tr = new TestResult(tc, result, latencyMs);

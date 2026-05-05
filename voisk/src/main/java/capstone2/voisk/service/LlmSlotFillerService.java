@@ -2,6 +2,7 @@ package capstone2.voisk.service;
 
 import capstone2.voisk.config.GeminiProperties;
 import capstone2.voisk.dto.SlotExtractionResult;
+import capstone2.voisk.entity.OrderSession;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -78,7 +79,7 @@ public class LlmSlotFillerService {
     private final RestClient geminiRestClient;
     private final GeminiProperties geminiProperties;
 
-    public SlotExtractionResult extract(String userInput) {
+    public SlotExtractionResult extract(String userInput, OrderSession session) {
         // ── Step 1: 키워드 매칭 ──────────────────────────────────────────────────
         boolean orderMatch   = matchesAny(userInput, ORDER_KW);
         boolean confirmMatch = matchesAny(userInput, CONFIRM_KW);
@@ -94,12 +95,12 @@ public class LlmSlotFillerService {
             return new SlotExtractionResult("ORDER", menu, quantity, null);
         }
 
-        // ── Step 2: 키워드 실패 or 애매한 상황 → LLM 호출 ───────────────────────
+        // ── Step 2: 키워드 실패 or 애매한 상황 → LLM 호출 (세션 컨텍스트 포함) ──
         String reason = (intentCount != 1) ? "KEYWORD_MISS" : "AMBIGUOUS";
         FALLBACK_LOG.warn("[{}] input=\"{}\" order={} confirm={} cancel={}",
                 reason, userInput, orderMatch, confirmMatch, cancelMatch);
 
-        SlotExtractionResult llmResult = callGemini(userInput);
+        SlotExtractionResult llmResult = callGemini(userInput, session);
 
         FALLBACK_LOG.info("[LLM_RESULT] input=\"{}\" intent={} menu={} quantity={} option={}",
                 userInput, llmResult.intent(), llmResult.menu(),
@@ -169,16 +170,42 @@ public class LlmSlotFillerService {
         return null;
     }
 
+    // ─── 세션 컨텍스트 문자열 생성 ────────────────────────────────────────────────
+
+    private String buildContextText(OrderSession session) {
+        StringBuilder sb = new StringBuilder("[현재 대화 상태]\n");
+        if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+            sb.append("- 단계: 주문 확인 대기\n");
+            sb.append(String.format("- 선택된 메뉴: %s%n", session.getMenu()));
+            sb.append(String.format("- 선택된 수량: %d개%n", session.getQuantity()));
+            sb.append(String.format("- 직전 시스템 질문: \"%s %d개 맞으시죠?\"",
+                    session.getMenu(), session.getQuantity()));
+        } else {
+            sb.append("- 단계: 주문 진행 중\n");
+            sb.append(String.format("- 선택된 메뉴: %s%n",
+                    session.getMenu() != null ? session.getMenu() : "없음 (선택 대기)"));
+            sb.append(String.format("- 선택된 수량: %s%n",
+                    session.getQuantity() != null ? session.getQuantity() + "개" : "없음 (입력 대기)"));
+            if (session.getMenu() == null) {
+                sb.append("- 직전 시스템 질문: \"일반 메뉴와 특식 메뉴 중 어떤 걸 드릴까요?\"");
+            } else {
+                sb.append("- 직전 시스템 질문: \"몇 개 드릴까요?\"");
+            }
+        }
+        return sb.toString();
+    }
+
     // ─── Gemini API 호출 ───────────────────────────────────────────────────────
 
-    private SlotExtractionResult callGemini(String userInput) {
+    private SlotExtractionResult callGemini(String userInput, OrderSession session) {
         try {
             Map<String, Object> systemInstruction = Map.of(
                     "parts", List.of(Map.of("text", SYSTEM_PROMPT))
             );
+            String contextedInput = buildContextText(session) + "\n\n[사용자 발화]\n" + userInput;
             Map<String, Object> userContent = Map.of(
                     "role", "user",
-                    "parts", List.of(Map.of("text", userInput))
+                    "parts", List.of(Map.of("text", contextedInput))
             );
             Map<String, Object> generationConfig = Map.of(
                     "temperature", 0,
