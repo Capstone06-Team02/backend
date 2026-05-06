@@ -3,9 +3,11 @@ package capstone2.voisk;
 import capstone2.voisk.config.GeminiProperties;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
-import capstone2.voisk.service.LlmSlotFillerService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
@@ -13,21 +15,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
- * LlmSlotFillerService 단독 평가 테스트.
+ * LLM(Gemini)만 단독으로 평가하는 테스트 — 키워드 라우팅 없이 전 케이스 LLM 직접 호출.
  *
- * 실행: ./gradlew test --tests "capstone2.voisk.LlmProcessorEvaluationTest"
+ * 실행: ./gradlew test --tests "capstone2.voisk.LlmOnlyEvaluationTest"
  */
-class LlmProcessorEvaluationTest {
-    private static final GeminiProperties geminiProperties = new GeminiProperties();
+class LlmOnlyEvaluationTest {
 
     // ── 데이터 모델 ──────────────────────────────────────────────────────────
 
-    /**
-     * @param type 유형A(정형) / 유형B(자연어) / 유형C(충돌) / 유형D(수량) / 유형E(상태의존) / 유형F(경계)
-     */
     record TestCase(
             String type,
             String input,
@@ -37,22 +36,10 @@ class LlmProcessorEvaluationTest {
     ) {}
 
     record TestResult(TestCase tc, SlotExtractionResult result, long latencyMs) {
-
-        boolean intentCorrect() {
-            return tc.expectedIntent().equals(result.intent());
-        }
-
-        boolean menuCorrect() {
-            return Objects.equals(tc.expectedMenu(), result.menu());
-        }
-
-        boolean quantityCorrect() {
-            return Objects.equals(tc.expectedQuantity(), result.quantity());
-        }
-
-        boolean allCorrect() {
-            return intentCorrect() && menuCorrect() && quantityCorrect();
-        }
+        boolean intentCorrect()   { return tc.expectedIntent().equals(result.intent()); }
+        boolean menuCorrect()     { return Objects.equals(tc.expectedMenu(), result.menu()); }
+        boolean quantityCorrect() { return Objects.equals(tc.expectedQuantity(), result.quantity()); }
+        boolean allCorrect()      { return intentCorrect() && menuCorrect() && quantityCorrect(); }
     }
 
     // ── 테스트 케이스 86개 ────────────────────────────────────────────────────
@@ -145,71 +132,90 @@ class LlmProcessorEvaluationTest {
             new TestCase("F", "얼마예요",                 "UNKNOWN", null,        null),
             new TestCase("F", "잘 모르겠어요",            "UNKNOWN", null,        null),
             new TestCase("F", "아무거나요",               "UNKNOWN", null,        null),
-
-            // ── 유형 F 추가 : intent 키워드 충돌 — 우선순위로 예측이 어긋나는 케이스 ──
             new TestCase("F", "일반 주세요 아니 취소",          "CANCEL",  "일반 메뉴", null),
             new TestCase("F", "특식으로 줘 아니 됐어요",         "CANCEL",  "특식 메뉴", null),
             new TestCase("F", "응 두 개요",                     "ORDER",   null,        2   ),
             new TestCase("F", "맞아요 세 개로요",               "ORDER",   null,        3   ),
             new TestCase("F", "아니 좋아요 그걸로요",            "CONFIRM", null,        null),
-
-            // ── 유형 F 추가 : 방언 취소 표현 — 키워드 미등록으로 UNKNOWN 예상 ──────
             new TestCase("F", "이거 안 하겄심더",               "CANCEL",  null,        null),
             new TestCase("F", "고마 해도 됐노",                 "CANCEL",  null,        null),
             new TestCase("F", "이거 됐구먼 빼주이소",            "CANCEL",  null,        null),
-
-            // ── 유형 F 추가 : 방언 취소 + 슬롯 감지 충돌 — menu/qty로 ORDER 오분류 예상 ──
             new TestCase("F", "일반 한 개 안 혀도 되겄어",       "CANCEL",  null,        null),
             new TestCase("F", "특식 그냥 됐노",                 "CANCEL",  "특식 메뉴", null),
-
-            // ── 유형 F 추가 : 방언 메뉴 문의 — 주문 아닌데 menu 감지로 ORDER 오분류 예상 ──
             new TestCase("F", "이 집 특식이 뭐시기여",           "UNKNOWN", "특식 메뉴", null)
     );
 
-    // ── 서비스 초기화 ─────────────────────────────────────────────────────────
+    // ── Gemini 프롬프트 (LlmSlotFillerService와 동일) ─────────────────────────
 
-    static LlmSlotFillerService service;
+    private static final String SYSTEM_PROMPT = """
+            너는 키오스크 주문 분석기야. 사용자의 한국어 음성 입력에서 아래 정보를 추출해서 JSON만 반환해. 설명 없이 JSON만.
+
+            메뉴 종류 (순서 기준):
+              1번 = "일반 메뉴" (8,000원) — 기본, 저렴한, 보통, 싼 쪽
+              2번 = "특식 메뉴" (12,000원) — 특별한, 비싼, 좋은, 프리미엄 쪽
+
+            반환 형식:
+            {"intent": "...", "menu": "..." 또는 null, "quantity": 숫자 또는 null, "option": "..." 또는 null}
+
+            intent 분류 기준:
+            - ORDER: 메뉴 선택, 수량 언급, 주문 의사 표현 (예: 주세요, 줘, 먹을게, 드릴게요, 하나 주세요)
+            - CONFIRM: 확인/동의 (예: 네, 응, 맞아요, 맞아, 확인, 그래요)
+            - CANCEL: 취소/거부/재시작 (예: 아니요, 아니, 취소, 다시, 틀려요)
+            - UNKNOWN: 위 세 가지 모두 해당 없음
+
+            메뉴 추론 기준 (다양한 표현 → 메뉴 매핑):
+            - "일반 메뉴"로 판단: 1번, 첫번째, 앞에 거, 기본, 보통, 일반, 싼 거, 저렴한 거, 작은 거
+            - "특식 메뉴"로 판단: 2번, 두번째, 뒤에 거, 특식, 특별한, 비싼 거, 좋은 거, 프리미엄, 스페셜
+
+            수량 추출 기준:
+            숫자+번(1번, 2번) → 메뉴 번호(수량 아님), 숫자+개/명/사람분 → 수량
+            "두 개" → 2, "둘" → 2, "2개" → 2, "하나" → 1, "한 개" → 1, "세 개" → 3, "열 개" → 10
+            "두 사람분" → 2, "세 명이서" → 3
+            예시: "특식 메뉴 2개" → menu: "특식 메뉴", quantity: 2 (2는 수량, 메뉴번호 아님)
+
+            option: 특별 요청 사항이 있으면 문자열, 없으면 null.
+            없는 정보는 null로 반환. 메뉴 이름은 반드시 "일반 메뉴" 또는 "특식 메뉴" 중 하나만 사용.
+            """;
+
+    // ── 초기화 ────────────────────────────────────────────────────────────────
+
+    static RestClient restClient;
+    static GeminiProperties props;
+    static final ObjectMapper MAPPER = new ObjectMapper();
 
     @BeforeAll
     static void setUp() throws IOException {
         String apiKey = System.getenv("GEMINI_API_KEY");
-        if (apiKey == null || apiKey.isBlank()) {
-            apiKey = readFromDotEnv("GEMINI_API_KEY");
-        }
-        if (apiKey == null || apiKey.isBlank()) {
+        if (apiKey == null || apiKey.isBlank()) apiKey = readFromDotEnv("GEMINI_API_KEY");
+        if (apiKey == null || apiKey.isBlank())
             throw new IllegalStateException("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.");
-        }
 
-        GeminiProperties props = new GeminiProperties();
+        props = new GeminiProperties();
         props.setApiKey(apiKey);
         props.setModel("gemini-2.5-flash");
 
-        RestClient restClient = RestClient.builder()
+        restClient = RestClient.builder()
                 .baseUrl("https://generativelanguage.googleapis.com")
                 .defaultHeader("x-goog-api-key", apiKey)
                 .build();
-
-        service = new LlmSlotFillerService(restClient, props);
     }
 
     // ── 메인 테스트 ───────────────────────────────────────────────────────────
 
     @Test
-    void evaluateLlmProcessor() {
+    void evaluateLlmOnly() {
         List<TestResult> results = new ArrayList<>();
-
         printHeader();
 
         for (int i = 0; i < TEST_CASES.size(); i++) {
             TestCase tc = TEST_CASES.get(i);
 
             long start = System.currentTimeMillis();
-            SlotExtractionResult result = service.extract(tc.input(), new OrderSession("test"));
+            SlotExtractionResult result = callGemini(tc.input(), new OrderSession("test"));
             long latencyMs = System.currentTimeMillis() - start;
 
             TestResult tr = new TestResult(tc, result, latencyMs);
             results.add(tr);
-
             printCaseRow(i + 1, tr);
         }
 
@@ -217,12 +223,78 @@ class LlmProcessorEvaluationTest {
         printWrongCases(results);
     }
 
+    // ── Gemini 직접 호출 ──────────────────────────────────────────────────────
+
+    private SlotExtractionResult callGemini(String userInput, OrderSession session) {
+        try {
+            Map<String, Object> systemInstruction = Map.of(
+                    "parts", List.of(Map.of("text", SYSTEM_PROMPT))
+            );
+            String contextedInput = buildContextText(session) + "\n\n[사용자 발화]\n" + userInput;
+            Map<String, Object> userContent = Map.of(
+                    "role", "user",
+                    "parts", List.of(Map.of("text", contextedInput))
+            );
+            Map<String, Object> body = Map.of(
+                    "system_instruction", systemInstruction,
+                    "contents", List.of(userContent),
+                    "generationConfig", Map.of("temperature", 0, "responseMimeType", "application/json")
+            );
+
+            String raw = restClient.post()
+                    .uri("/v1beta/models/{model}:generateContent", props.getModel())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root   = MAPPER.readTree(raw);
+            String content  = root.path("candidates").get(0)
+                                  .path("content").path("parts").get(0)
+                                  .path("text").asText();
+            JsonNode parsed = MAPPER.readTree(content);
+
+            String  intent   = parsed.path("intent").asText("UNKNOWN");
+            String  menu     = parsed.path("menu").isNull()     ? null : parsed.path("menu").asText(null);
+            Integer quantity = parsed.path("quantity").isNull() ? null : parsed.path("quantity").asInt();
+            String  option   = parsed.path("option").isNull()   ? null : parsed.path("option").asText(null);
+
+            return new SlotExtractionResult(intent, menu, quantity, option);
+        } catch (Exception e) {
+            System.err.printf("[Gemini 오류] input=\"%s\" error=%s%n", userInput, e.getMessage());
+            return SlotExtractionResult.fallback();
+        }
+    }
+
+    private String buildContextText(OrderSession session) {
+        StringBuilder sb = new StringBuilder("[현재 대화 상태]\n");
+        if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+            sb.append("- 단계: 주문 확인 대기\n");
+            sb.append(String.format("- 선택된 메뉴: %s%n", session.getMenu()));
+            sb.append(String.format("- 선택된 수량: %d개%n", session.getQuantity()));
+            sb.append(String.format("- 직전 시스템 질문: \"%s %d개 맞으시죠?\"",
+                    session.getMenu(), session.getQuantity()));
+        } else {
+            sb.append("- 단계: 주문 진행 중\n");
+            sb.append(String.format("- 선택된 메뉴: %s%n",
+                    session.getMenu() != null ? session.getMenu() : "없음 (선택 대기)"));
+            sb.append(String.format("- 선택된 수량: %s%n",
+                    session.getQuantity() != null ? session.getQuantity() + "개" : "없음 (입력 대기)"));
+            if (session.getMenu() == null) {
+                sb.append("- 직전 시스템 질문: \"일반 메뉴와 특식 메뉴 중 어떤 걸 드릴까요?\"");
+            } else {
+                sb.append("- 직전 시스템 질문: \"몇 개 드릴까요?\"");
+            }
+        }
+        return sb.toString();
+    }
+
     // ── 출력 헬퍼 ─────────────────────────────────────────────────────────────
 
     private void printHeader() {
         System.out.println();
         System.out.println("╔══════════════════════════════════════════════════════════════════════════╗");
-        System.out.println("║              LLMProcessor (LlmSlotFillerService) 성능 평가              ║");
+        System.out.println("║                   LLM 단독 (Gemini Direct) 성능 평가                   ║");
         System.out.println("╚══════════════════════════════════════════════════════════════════════════╝");
         System.out.println();
         System.out.printf("%-4s %-3s %-28s %8s  %-10s %-8s %-5s  %s%n",
@@ -242,31 +314,23 @@ class LlmProcessorEvaluationTest {
                 tr.result().intent(),
                 Objects.toString(tr.result().menu(), "null"),
                 Objects.toString(tr.result().quantity(), "null"),
-                tr.allCorrect() ? "O" : "X"
-        );
+                tr.allCorrect() ? "O" : "X");
     }
 
     private void printMetricsTable(List<TestResult> results) {
-        int total = results.size();
-
+        int total     = results.size();
         long intentOk = results.stream().filter(TestResult::intentCorrect).count();
         long menuOk   = results.stream().filter(TestResult::menuCorrect).count();
         long qtyOk    = results.stream().filter(TestResult::quantityCorrect).count();
         long unknown  = results.stream().filter(r -> "UNKNOWN".equals(r.result().intent())).count();
-        double avgMs  = results.stream().mapToLong(r -> r.latencyMs()).average().orElse(0);
+        double avgMs  = results.stream().mapToLong(TestResult::latencyMs).average().orElse(0);
 
-        long aTotal   = countByType(results, "A");
-        long aOk      = countCorrectByType(results, "A");
-        long bTotal   = countByType(results, "B");
-        long bOk      = countCorrectByType(results, "B");
-        long cTotal   = countByType(results, "C");
-        long cOk      = countCorrectByType(results, "C");
-        long dTotal   = countByType(results, "D");
-        long dOk      = countCorrectByType(results, "D");
-        long eTotal   = countByType(results, "E");
-        long eOk      = countCorrectByType(results, "E");
-        long fTotal   = countByType(results, "F");
-        long fOk      = countCorrectByType(results, "F");
+        long aTotal = countByType(results, "A"); long aOk = countCorrectByType(results, "A");
+        long bTotal = countByType(results, "B"); long bOk = countCorrectByType(results, "B");
+        long cTotal = countByType(results, "C"); long cOk = countCorrectByType(results, "C");
+        long dTotal = countByType(results, "D"); long dOk = countCorrectByType(results, "D");
+        long eTotal = countByType(results, "E"); long eOk = countCorrectByType(results, "E");
+        long fTotal = countByType(results, "F"); long fOk = countCorrectByType(results, "F");
 
         System.out.println();
         System.out.println("┌──────────────────────────────────────────────┬─────────────────┐");
@@ -274,17 +338,17 @@ class LlmProcessorEvaluationTest {
         System.out.println("├──────────────────────────────────────────────┼─────────────────┤");
         System.out.printf( "│ Intent 정확도 (전체  %2d / %2d)               │     %6.1f %%   │%n",
                 intentOk, total, pct(intentOk, total));
-        System.out.printf( "│ Intent 정확도 (유형A 정형    %2d / %2d)       │     %6.1f %%   │%n",
+        System.out.printf( "│   유형A 정형    %2d / %2d                     │     %6.1f %%   │%n",
                 aOk, aTotal, pct(aOk, aTotal));
-        System.out.printf( "│ Intent 정확도 (유형B 자연어  %2d / %2d)       │     %6.1f %%   │%n",
+        System.out.printf( "│   유형B 자연어  %2d / %2d                     │     %6.1f %%   │%n",
                 bOk, bTotal, pct(bOk, bTotal));
-        System.out.printf( "│ Intent 정확도 (유형C 충돌    %2d / %2d)       │     %6.1f %%   │%n",
+        System.out.printf( "│   유형C 충돌    %2d / %2d                     │     %6.1f %%   │%n",
                 cOk, cTotal, pct(cOk, cTotal));
-        System.out.printf( "│ Intent 정확도 (유형D 수량    %2d / %2d)       │     %6.1f %%   │%n",
+        System.out.printf( "│   유형D 수량    %2d / %2d                     │     %6.1f %%   │%n",
                 dOk, dTotal, pct(dOk, dTotal));
-        System.out.printf( "│ Intent 정확도 (유형E 상태    %2d / %2d)       │     %6.1f %%   │%n",
+        System.out.printf( "│   유형E 상태    %2d / %2d                     │     %6.1f %%   │%n",
                 eOk, eTotal, pct(eOk, eTotal));
-        System.out.printf( "│ Intent 정확도 (유형F 경계    %2d / %2d)       │     %6.1f %%   │%n",
+        System.out.printf( "│   유형F 경계    %2d / %2d                     │     %6.1f %%   │%n",
                 fOk, fTotal, pct(fOk, fTotal));
         System.out.println("├──────────────────────────────────────────────┼─────────────────┤");
         System.out.printf( "│ Slot 정확도 (menu     %2d / %2d)              │     %6.1f %%   │%n",
@@ -299,10 +363,7 @@ class LlmProcessorEvaluationTest {
     }
 
     private void printWrongCases(List<TestResult> results) {
-        List<TestResult> wrongs = new ArrayList<>();
-        for (int i = 0; i < results.size(); i++) {
-            if (!results.get(i).allCorrect()) wrongs.add(results.get(i));
-        }
+        List<TestResult> wrongs = results.stream().filter(r -> !r.allCorrect()).toList();
 
         System.out.println();
         if (wrongs.isEmpty()) {
@@ -310,14 +371,10 @@ class LlmProcessorEvaluationTest {
             return;
         }
 
-        System.out.printf("=== 틀린 케이스 (%d건) ===%n", wrongs.size());
-        System.out.println();
-
-        for (int i = 0; i < wrongs.size(); i++) {
-            TestResult r = wrongs.get(i);
-            int globalNo = results.indexOf(r) + 1;
-
-            System.out.printf("[%2d] 발화  : %s%n", globalNo, r.tc().input());
+        System.out.printf("=== 틀린 케이스 (%d건) ===%n%n", wrongs.size());
+        for (TestResult r : wrongs) {
+            int no = results.indexOf(r) + 1;
+            System.out.printf("[%2d / %s] 발화  : %s%n", no, r.tc().type(), r.tc().input());
             System.out.printf("     예측  : intent=%-8s  menu=%-8s  qty=%s%n",
                     r.result().intent(),
                     Objects.toString(r.result().menu(), "null"),
@@ -326,28 +383,24 @@ class LlmProcessorEvaluationTest {
                     r.tc().expectedIntent(),
                     Objects.toString(r.tc().expectedMenu(), "null"),
                     Objects.toString(r.tc().expectedQuantity(), "null"));
-            System.out.printf("     오류  : intent=%s  menu=%s  quantity=%s%n",
-                    r.intentCorrect()  ? "O" : "X",
-                    r.menuCorrect()    ? "O" : "X",
-                    r.quantityCorrect()? "O" : "X");
-            System.out.printf("     레이턴시: %dms%n%n", r.latencyMs());
+            System.out.printf("     오류  : intent=%s  menu=%s  quantity=%s  레이턴시=%dms%n%n",
+                    r.intentCorrect()   ? "O" : "X",
+                    r.menuCorrect()     ? "O" : "X",
+                    r.quantityCorrect() ? "O" : "X",
+                    r.latencyMs());
         }
     }
 
     // ── 유틸 ──────────────────────────────────────────────────────────────────
 
-    private double pct(long correct, long total) {
-        return total == 0 ? 0.0 : 100.0 * correct / total;
+    private double pct(long n, long d) { return d == 0 ? 0.0 : 100.0 * n / d; }
+
+    private long countByType(List<TestResult> r, String type) {
+        return r.stream().filter(x -> type.equals(x.tc().type())).count();
     }
 
-    private long countByType(List<TestResult> results, String type) {
-        return results.stream().filter(r -> type.equals(r.tc().type())).count();
-    }
-
-    private long countCorrectByType(List<TestResult> results, String type) {
-        return results.stream()
-                .filter(r -> type.equals(r.tc().type()) && r.intentCorrect())
-                .count();
+    private long countCorrectByType(List<TestResult> r, String type) {
+        return r.stream().filter(x -> type.equals(x.tc().type()) && x.intentCorrect()).count();
     }
 
     private static String readFromDotEnv(String key) throws IOException {
