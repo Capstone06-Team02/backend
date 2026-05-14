@@ -1,48 +1,40 @@
 package capstone2.voisk.entity;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
+import java.time.LocalDateTime;
+import java.util.List;
 
 @Entity
 @Table(name = "order_session")
 @Getter
-@Setter
-@NoArgsConstructor
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@AllArgsConstructor
+@Builder
 public class OrderSession {
 
     @Id
-    @Column(name = "session_id", nullable = false)
-    private String sessionId;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "order_session_id")
+    private Long id;
 
-    @Column(name = "menu")
-    private String menu;
+    @Column(name = "total_price")
+    private Integer totalPrice;
 
-    @Column(name = "quantity")
-    private Integer quantity;
+    @Column(name = "table_number", length = 20)
+    private String tableNumber;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "phase", nullable = false)
-    private Phase phase;
+    @Column(name = "status", length = 20)
+    private OrderStatus status;
 
-    public enum Phase {
-        ORDERING, CONFIRMING, DONE
-    }
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
 
-    public OrderSession(String sessionId) {
-        this.sessionId = sessionId;
-        this.phase = Phase.ORDERING;
-    }
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "store id", nullable = false)
+    private Store store;
 
-    @Transient
-    public boolean isSlotsComplete() {
-        return menu != null && quantity != null;
-    }
-
-    public void reset() {
-        this.menu     = null;
-        this.quantity = null;
-        this.phase    = Phase.ORDERING;
-    }
+    @OneToMany(mappedBy = "orderSession")
+    private List<OrderMenu> orderMenus;
 }
