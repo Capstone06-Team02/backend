@@ -32,6 +32,9 @@ public class OrderSession {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "store id") // 임시로 nullable 허용 또는 서비스 로직 수정 필요
     private Store store;
