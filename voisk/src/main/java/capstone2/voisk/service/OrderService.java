@@ -3,6 +3,7 @@ package capstone2.voisk.service;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.entity.OrderSession;
+import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.repository.OrderSessionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -40,13 +41,20 @@ public class OrderService {
 
     public OrderResponse process(OrderRequest request) {
         String sid      = resolveId(request.getSessionId());
+        
+        // FIXME: OrderSession 엔티티의 id가 Long 타입이므로, String sid 사용 부분 수정이 필요할 수 있습니다.
         OrderSession session = sessionRepository.findById(sid)
-                .orElseGet(() -> sessionRepository.save(new OrderSession(sid)));
+                .orElseGet(() -> {
+                    OrderSession newSession = new OrderSession();
+                    // newSession.setSessionId(sid); // 필요한 경우
+                    return sessionRepository.save(newSession);
+                });
+                
         String text     = request.getInput() == null ? "" : request.getInput().trim();
         String intent   = classifyIntent(text);
 
         // DONE 상태 → 자동 리셋 후 새 주문
-        if (session.getPhase() == OrderSession.Phase.DONE) {
+        if (session.getStatus() == OrderStatus.DONE) {
             session.reset();
         }
 
@@ -60,9 +68,9 @@ public class OrderService {
         }
 
         // CONFIRMING 단계 + CONFIRM → 주문 완료
-        if (session.getPhase() == OrderSession.Phase.CONFIRMING && "CONFIRM".equals(intent)) {
+        if (session.getStatus() == OrderStatus.CONFIRMING && "CONFIRM".equals(intent)) {
             String msg = String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity());
-            session.setPhase(OrderSession.Phase.DONE);
+            session.setStatus(OrderStatus.DONE);
             sessionRepository.save(session);
             return build(sid, intent, session, msg, List.of());
         }
@@ -74,7 +82,7 @@ public class OrderService {
         List<String> qr;
 
         if (session.isSlotsComplete()) {
-            session.setPhase(OrderSession.Phase.CONFIRMING);
+            session.setStatus(OrderStatus.CONFIRMING);
             msg = String.format("%s %d개 맞으시죠? 확인해 주세요.", session.getMenu(), session.getQuantity());
             qr  = List.of("네", "아니요");
         } else if (session.getMenu() == null) {

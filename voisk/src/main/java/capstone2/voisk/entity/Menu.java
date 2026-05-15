@@ -36,5 +36,5 @@ public class Menu {
     private Category category;
 
     @OneToMany(mappedBy = "menu")
-    private List<Menu> menus = new ArrayList<>();
+    private List<OptionGroup> optionGroups = new ArrayList<>();
 }
