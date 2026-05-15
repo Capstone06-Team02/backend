@@ -28,6 +28,15 @@ public class OptionItem {
     @Column(name = "is_available")
     private Boolean isAvailable;
 
+    @Column(name = "default_quantity")
+    private int defaultQuantity;
+
+    @Column(name = "max_quantity")
+    private int maxQuantity;
+
+    @Column(name = "is_default")
+    private boolean isDefault;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_option_group id", nullable = false)
     private OptionGroup optionGroup;
