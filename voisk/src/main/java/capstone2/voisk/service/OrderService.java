@@ -46,7 +46,6 @@ public class OrderService {
         OrderSession session = sessionRepository.findById(sid)
                 .orElseGet(() -> {
                     OrderSession newSession = new OrderSession();
-                    // newSession.setSessionId(sid); // 필요한 경우
                     return sessionRepository.save(newSession);
                 });
                 
