@@ -42,7 +42,6 @@ public class OrderService {
     public OrderResponse process(OrderRequest request) {
         String sid      = resolveId(request.getSessionId());
         
-        // FIXME: OrderSession 엔티티의 id가 Long 타입이므로, String sid 사용 부분 수정이 필요할 수 있습니다.
         OrderSession session = sessionRepository.findById(sid)
                 .orElseGet(() -> {
                     OrderSession newSession = new OrderSession();
