@@ -39,7 +39,7 @@ public class OptionGroup {
     private Menu menu;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_option_item id", nullable = false)
+    @JoinColumn(name = "parent_option_item id")
     private OptionItem parentOptionItem;
 
     @OneToMany(mappedBy = "optionGroup")
