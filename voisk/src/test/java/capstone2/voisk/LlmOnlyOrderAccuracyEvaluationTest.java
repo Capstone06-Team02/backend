@@ -3,6 +3,7 @@ package capstone2.voisk;
 import capstone2.voisk.config.GeminiProperties;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
+import capstone2.voisk.entity.OrderStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -433,7 +434,7 @@ class LlmOnlyOrderAccuracyEvaluationTest {
         System.out.println("─".repeat(70));
 
         List<TurnResult> turnResults = new ArrayList<>();
-        OrderSession session = new OrderSession("sim-" + no);
+        OrderSession session = new OrderSession();
 
         for (int i = 0; i < scenario.turns().size(); i++) {
             TurnSpec spec = scenario.turns().get(i);
@@ -454,7 +455,7 @@ class LlmOnlyOrderAccuracyEvaluationTest {
             printTurnRow(i + 1, tr, session);
         }
 
-        boolean completed    = session.getPhase() == OrderSession.Phase.DONE;
+        boolean completed    = session.getStatus() == OrderStatus.DONE;
         boolean orderCorrect = completed
                 && scenario.finalMenu().equals(Objects.toString(session.getMenu(), ""))
                 && scenario.finalQty() == Objects.requireNonNullElse(session.getQuantity(), -1);
@@ -474,18 +475,18 @@ class LlmOnlyOrderAccuracyEvaluationTest {
         String intent = result.intent();
 
         if ("CANCEL".equals(intent)) {
-            if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+            if (session.getStatus() == OrderStatus.CONFIRMING) {
                 // 확인 단계 거부 → 메뉴 유지, 수량만 초기화
                 session.setQuantity(null);
-                session.setPhase(OrderSession.Phase.ORDERING);
+                session.setStatus(OrderStatus.ORDERING);
             } else {
                 session.reset();
             }
             return;
         }
 
-        if (session.getPhase() == OrderSession.Phase.CONFIRMING && "CONFIRM".equals(intent)) {
-            session.setPhase(OrderSession.Phase.DONE);
+        if (session.getStatus() == OrderStatus.CONFIRMING && "CONFIRM".equals(intent)) {
+            session.setStatus(OrderStatus.DONE);
             return;
         }
 
@@ -505,7 +506,7 @@ class LlmOnlyOrderAccuracyEvaluationTest {
         }
 
         if (session.isSlotsComplete()) {
-            session.setPhase(OrderSession.Phase.CONFIRMING);
+            session.setStatus(OrderStatus.CONFIRMING);
         }
     }
 
@@ -554,7 +555,7 @@ class LlmOnlyOrderAccuracyEvaluationTest {
 
     private String buildContextText(OrderSession session) {
         StringBuilder sb = new StringBuilder("[현재 대화 상태]\n");
-        if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+        if (session.getStatus() == OrderStatus.CONFIRMING) {
             sb.append("- 단계: 주문 확인 대기\n");
             sb.append(String.format("- 선택된 메뉴: %s%n", session.getMenu()));
             sb.append(String.format("- 선택된 수량: %d개%n", session.getQuantity()));

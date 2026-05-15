@@ -4,6 +4,7 @@ import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
+import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.repository.OrderSessionRepository;
 import capstone2.voisk.service.LlmSlotFillerService;
 import capstone2.voisk.service.OrderService;
@@ -49,7 +50,9 @@ class OrderFlowTest {
 
     @BeforeEach
     void setUp() {
-        session = new OrderSession(SID);
+        session = new OrderSession();
+        // ID setting could be needed if id field was string. 
+        // OrderSession uses Long id, no SID string is used in constructor.
         when(sessionRepository.findById(SID)).thenReturn(Optional.of(session));
         when(sessionRepository.save(any(OrderSession.class))).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -72,7 +75,7 @@ class OrderFlowTest {
         // 3턴: 확인
         OrderResponse r3 = send("네", slot("CONFIRM", null, null));
         assertThat(r3.getResponse()).contains("주문 완료");
-        assertThat(session.getPhase()).isEqualTo(OrderSession.Phase.DONE);
+        assertThat(session.getStatus()).isEqualTo(OrderStatus.DONE);
     }
 
     // ── 시나리오 2: 메뉴·수량 한 번에 입력 ──────────────────────────────────
@@ -86,7 +89,7 @@ class OrderFlowTest {
         // 2턴: 확인
         OrderResponse r2 = send("네", slot("CONFIRM", null, null));
         assertThat(r2.getResponse()).contains("주문 완료");
-        assertThat(session.getPhase()).isEqualTo(OrderSession.Phase.DONE);
+        assertThat(session.getStatus()).isEqualTo(OrderStatus.DONE);
     }
 
     // ── 시나리오 3: 주문 진행 중 취소 ────────────────────────────────────────
@@ -100,7 +103,7 @@ class OrderFlowTest {
         assertThat(r2.getResponse()).contains("취소");
         assertThat(session.getMenu()).isNull();
         assertThat(session.getQuantity()).isNull();
-        assertThat(session.getPhase()).isEqualTo(OrderSession.Phase.ORDERING);
+        assertThat(session.getStatus()).isEqualTo(OrderStatus.ORDERING);
     }
 
     // ── 시나리오 4: 확인 단계에서 거부 → 수량 재입력 후 완료 ─────────────────
@@ -114,7 +117,7 @@ class OrderFlowTest {
         assertThat(r2.getResponse()).contains("특식 메뉴").contains("수량을 다시");
         assertThat(session.getMenu()).isEqualTo("특식 메뉴");
         assertThat(session.getQuantity()).isNull();
-        assertThat(session.getPhase()).isEqualTo(OrderSession.Phase.ORDERING);
+        assertThat(session.getStatus()).isEqualTo(OrderStatus.ORDERING);
 
         // 3턴: 새 수량 입력
         OrderResponse r3 = send("3개", slot("ORDER", null, 3));
@@ -166,12 +169,12 @@ class OrderFlowTest {
         // DONE 상태로 세션 사전 설정
         session.setMenu("일반 메뉴");
         session.setQuantity(2);
-        session.setPhase(OrderSession.Phase.DONE);
+        session.setStatus(OrderStatus.DONE);
 
         // 새 발화 → 자동 reset 후 주문 시작
         OrderResponse r1 = send("특식 주세요", slot("ORDER", "특식 메뉴", null));
         assertThat(r1.getSlots().getMenu()).isEqualTo("특식 메뉴");
-        assertThat(session.getPhase()).isEqualTo(OrderSession.Phase.ORDERING);
+        assertThat(session.getStatus()).isEqualTo(OrderStatus.ORDERING);
     }
 
     // ── 시나리오 8: 존재하지 않는 메뉴명 무시 ───────────────────────────────

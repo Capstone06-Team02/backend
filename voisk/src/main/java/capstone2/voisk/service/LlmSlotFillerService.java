@@ -3,6 +3,7 @@ package capstone2.voisk.service;
 import capstone2.voisk.config.GeminiProperties;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
+import capstone2.voisk.entity.OrderStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -174,7 +175,7 @@ public class LlmSlotFillerService {
 
     private String buildContextText(OrderSession session) {
         StringBuilder sb = new StringBuilder("[현재 대화 상태]\n");
-        if (session.getPhase() == OrderSession.Phase.CONFIRMING) {
+        if (session.getStatus() == OrderStatus.CONFIRMING) {
             sb.append("- 단계: 주문 확인 대기\n");
             sb.append(String.format("- 선택된 메뉴: %s%n", session.getMenu()));
             sb.append(String.format("- 선택된 수량: %d개%n", session.getQuantity()));

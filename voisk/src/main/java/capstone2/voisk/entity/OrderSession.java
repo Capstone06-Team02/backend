@@ -1,55 +1,59 @@
 package capstone2.voisk.entity;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
-import org.hibernate.annotations.UpdateTimestamp;
-
+import lombok.*;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Entity
 @Table(name = "order_session")
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class OrderSession {
 
     @Id
-    @Column(name = "session_id", nullable = false)
-    private String sessionId;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "order_session_id")
+    private Long id;
 
-    @Column(name = "menu")
-    private String menu;
+    @Column(name = "total_price")
+    private Integer totalPrice;
 
-    @Column(name = "quantity")
-    private Integer quantity;
+    @Column(name = "table_number", length = 20)
+    private String tableNumber;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "phase", nullable = false)
-    private Phase phase;
+    @Column(name = "status", length = 20)
+    private OrderStatus status;
 
-    @UpdateTimestamp
-    @Column(name = "updated_at", nullable = false)
-    private LocalDateTime updatedAt;
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
 
-    public enum Phase {
-        ORDERING, CONFIRMING, DONE
-    }
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "store id") // 임시로 nullable 허용 또는 서비스 로직 수정 필요
+    private Store store;
 
-    public OrderSession(String sessionId) {
-        this.sessionId = sessionId;
-        this.phase = Phase.ORDERING;
-    }
+    @OneToMany(mappedBy = "orderSession")
+    private List<OrderMenu> orderMenus;
+
+    // --- 서비스 로직 처리를 위한 Transient(비영속) 필드 및 메서드 추가 ---
 
     @Transient
-    public boolean isSlotsComplete() {
-        return menu != null && quantity != null;
-    }
+    private String menu;
+
+    @Transient
+    private Integer quantity;
 
     public void reset() {
-        this.menu     = null;
+        this.menu = null;
         this.quantity = null;
-        this.phase    = Phase.ORDERING;
+        this.status = OrderStatus.ORDERING;
+    }
+
+    public boolean isSlotsComplete() {
+        return this.menu != null && this.quantity != null;
     }
 }
