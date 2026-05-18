@@ -35,11 +35,11 @@ public class OptionGroup {
     private Boolean isAvailable;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "menu id", nullable = false)
+    @JoinColumn(name = "menu_id", nullable = false)
     private Menu menu;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_option_item id")
+    @JoinColumn(name = "parent_option_item_id", nullable = false)
     private OptionItem parentOptionItem;
 
     @OneToMany(mappedBy = "optionGroup")

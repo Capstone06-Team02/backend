@@ -36,7 +36,7 @@ public class OrderSession {
     private LocalDateTime updatedAt;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "store id") // 임시로 nullable 허용 또는 서비스 로직 수정 필요
+    @JoinColumn(name = "store_id")
     private Store store;
 
     @OneToMany(mappedBy = "orderSession")
