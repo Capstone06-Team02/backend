@@ -29,7 +29,7 @@ public class OptionItem {
     private Boolean isAvailable;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_option_group id", nullable = false)
+    @JoinColumn(name = "parent_option_group_id", nullable = false)
     private OptionGroup optionGroup;
 
     @OneToMany(mappedBy = "parentOptionItem")

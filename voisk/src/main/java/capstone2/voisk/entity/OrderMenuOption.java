@@ -20,10 +20,10 @@ public class OrderMenuOption {
     private Integer quantity;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_menu id", nullable = false)
+    @JoinColumn(name = "order_menu_id", nullable = false)
     private OrderMenu orderMenu;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_item id", nullable = false)
+    @JoinColumn(name = "order_item_id", nullable = false)
     private OptionItem optionItem;
 }
