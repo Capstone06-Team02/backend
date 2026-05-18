@@ -2,13 +2,20 @@ spring:
   application:
     name: voisk
   datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
+    mysql:
+      url: ${MYSQL_URL}
+      username: ${MYSQL_USERNAME}
+      password: ${MYSQL_PASSWORD}
+      driver-class-name: com.mysql.cj.jdbc.Driver
+    postgres:
+      url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/voisk_vector}
+      username: ${POSTGRES_USERNAME:postgres}
+      password: ${POSTGRES_PASSWORD:voisk1234}
+      driver-class-name: org.postgresql.Driver
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: create
+      ddl-auto: update
     show-sql: false
     properties:
       hibernate:
