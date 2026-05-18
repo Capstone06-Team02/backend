@@ -25,11 +25,11 @@ public class OrderMenu {
     private Integer priceWithOption;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_session id", nullable = false)
+    @JoinColumn(name = "order_session_id", nullable = false)
     private OrderSession orderSession;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "menu id", nullable = false)
+    @JoinColumn(name = "menu_id", nullable = false)
     private Menu menu;
 
     @OneToMany(mappedBy = "orderMenu")
