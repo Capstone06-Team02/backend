@@ -5,6 +5,8 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.CreationTimestamp;
@@ -20,7 +22,9 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "menu_embedding")
 @Getter
+@Builder
 @NoArgsConstructor
+@AllArgsConstructor
 public class MenuEmbedding {
 
     // MySQL menu PK와 동기화. auto-increment 없이 직접 지정.
