@@ -29,13 +29,13 @@ public class OptionItem {
     private Boolean isAvailable;
 
     @Column(name = "default_quantity")
-    private int defaultQuantity;
+    private Integer defaultQuantity;
 
     @Column(name = "max_quantity")
-    private int maxQuantity;
+    private Integer maxQuantity;
 
     @Column(name = "is_default")
-    private boolean isDefault;
+    private Boolean isDefault;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_option_group_id", nullable = false)
