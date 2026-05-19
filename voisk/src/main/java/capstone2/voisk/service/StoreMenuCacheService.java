@@ -26,6 +26,7 @@ public class StoreMenuCacheService {
     private final StoreRepository storeRepository;
     private final MenuRepository menuRepository;
     private final Map<Long, MenuCacheResponse> cache = new ConcurrentHashMap<>();
+    private volatile Long latestRestaurantId;
 
     @Transactional(readOnly = true)
     public MenuCacheResponse cacheMenus(Long restaurantId) {
@@ -49,11 +50,16 @@ public class StoreMenuCacheService {
                 menus
         );
         cache.put(restaurantId, response);
+        latestRestaurantId = restaurantId;
         return response;
     }
 
     public Optional<MenuCacheResponse> getCachedMenus(Long restaurantId) {
         return Optional.ofNullable(cache.get(restaurantId));
+    }
+
+    public Optional<MenuCacheResponse> getLatestCachedMenus() {
+        return latestRestaurantId == null ? Optional.empty() : getCachedMenus(latestRestaurantId);
     }
 
     private MenuCacheResponse.MenuInfo toMenuInfo(Menu menu) {

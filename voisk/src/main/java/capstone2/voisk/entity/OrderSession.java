@@ -3,7 +3,9 @@ package capstone2.voisk.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Entity
 @Table(name = "order_session")
@@ -50,9 +52,20 @@ public class OrderSession {
     @Transient
     private Integer quantity;
 
+    @Transient
+    private Long restaurantId;
+
+    @Transient
+    private Long menuId;
+
+    @Transient
+    private Set<Long> selectedOptionItemIds = new LinkedHashSet<>();
+
     public void reset() {
         this.menu = null;
         this.quantity = null;
+        this.menuId = null;
+        this.selectedOptionItemIds = new LinkedHashSet<>();
         this.status = OrderStatus.ORDERING;
     }
 

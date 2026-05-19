@@ -39,5 +39,8 @@ public class OrderResponse {
 
         @Schema(description = "주문 수량", nullable = true, example = "2")
         private Integer quantity;
+
+        @Schema(description = "메뉴 확정 후 채워야 하는 옵션 슬롯 목록")
+        private List<OptionSlot> optionSlots;
     }
 }
