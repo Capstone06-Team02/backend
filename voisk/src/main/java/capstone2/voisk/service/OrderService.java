@@ -4,6 +4,7 @@ import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.OptionSlot;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
+import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +47,7 @@ public class OrderService {
     );
 
     private final StoreMenuCacheService storeMenuCacheService;
+    private final LlmSlotFillerService llmSlotFillerService;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
 
     public OrderResponse process(OrderRequest request) {
@@ -58,7 +60,8 @@ public class OrderService {
 
         String text = request.getInput() == null ? "" : request.getInput().trim();
         Optional<MenuCacheResponse> catalog = resolveCatalog(session);
-        String intent = classifyIntent(text, catalog);
+        SlotExtractionResult extracted = extractSlots(text, session, catalog);
+        String intent = "UNKNOWN".equals(extracted.intent()) ? classifyIntent(text, catalog) : extracted.intent();
 
         if (session.getStatus() == OrderStatus.DONE) {
             Long restaurantId = session.getRestaurantId();
@@ -78,7 +81,7 @@ public class OrderService {
             return confirmMenuAndStartOptionFilling(sid, intent, session, catalog);
         }
 
-        fillMenuAndQuantitySlots(text, session, catalog);
+        fillMenuAndQuantitySlots(text, session, catalog, extracted);
 
         String message;
         List<String> quickReplies;
@@ -314,22 +317,34 @@ public class OrderService {
         );
     }
 
-    private void fillMenuAndQuantitySlots(String text, OrderSession session, Optional<MenuCacheResponse> catalog) {
+    private SlotExtractionResult extractSlots(
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (llmSlotFillerService == null) {
+            return SlotExtractionResult.fallback();
+        }
+        return llmSlotFillerService.extract(text, session);
+    }
+
+    private void fillMenuAndQuantitySlots(
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog,
+            SlotExtractionResult extracted
+    ) {
         if (session.getMenu() == null) {
-            findMenuInText(text, catalog).ifPresentOrElse(menu -> {
+            findMenuByName(extracted.menu(), catalog)
+                    .or(() -> findMenuInText(text, catalog))
+                    .ifPresent(menu -> {
                 session.setMenu(menu.name());
                 session.setMenuId(menu.menuId());
-            }, () -> {
-                if (text.contains("특식")) {
-                    session.setMenu("특식 메뉴");
-                } else if (text.contains("일반")) {
-                    session.setMenu("일반 메뉴");
-                }
             });
         }
 
         if (session.getQuantity() == null) {
-            Integer quantity = extractQty(text);
+            Integer quantity = extracted.quantity() != null ? extracted.quantity() : extractQty(text);
             if (quantity != null && quantity > 0) {
                 session.setQuantity(quantity);
             }
@@ -358,6 +373,17 @@ public class OrderService {
                 .findFirst();
     }
 
+    private Optional<MenuCacheResponse.MenuInfo> findMenuByName(String menuName, Optional<MenuCacheResponse> catalog) {
+        if (menuName == null || menuName.isBlank()) {
+            return Optional.empty();
+        }
+        String normalizedMenuName = normalize(menuName);
+        return catalog.stream()
+                .flatMap(response -> response.menus().stream())
+                .filter(menu -> normalize(menu.name()).equals(normalizedMenuName))
+                .findFirst();
+    }
+
     private Optional<MenuCacheResponse.MenuInfo> findSelectedMenu(
             Optional<MenuCacheResponse> catalog,
             OrderSession session
@@ -377,8 +403,7 @@ public class OrderService {
         if (containsAny(text, CONFIRM_KW) && extractQty(text) == null) {
             return "CONFIRM";
         }
-        if (findMenuInText(text, catalog).isPresent() || text.contains("일반") || text.contains("특식")
-                || extractQty(text) != null) {
+        if (findMenuInText(text, catalog).isPresent() || extractQty(text) != null) {
             return "ORDER";
         }
         return "UNKNOWN";
@@ -403,7 +428,7 @@ public class OrderService {
                 .map(MenuCacheResponse.MenuInfo::name)
                 .limit(6)
                 .toList();
-        return cachedMenus.isEmpty() ? List.of("일반 메뉴", "특식 메뉴") : cachedMenus;
+        return cachedMenus;
     }
 
     private List<String> quickRepliesForOptions(List<OptionSlot> slots) {

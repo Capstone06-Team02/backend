@@ -17,7 +17,7 @@ public class OrderResponse {
     @Schema(description = "분류된 사용자 의도", allowableValues = {"ORDER", "CONFIRM", "CANCEL", "UNKNOWN"})
     private String intent;
 
-    @Schema(description = "봇 응답 메시지", example = "일반 메뉴 2개 맞으시죠? 확인해 주세요.")
+    @Schema(description = "봇 응답 메시지", example = "슈크림 라떼 2개 맞으시죠? 확인해 주세요.")
     private String response;
 
     @Schema(description = "현재까지 수집된 슬롯 정보")
@@ -34,7 +34,7 @@ public class OrderResponse {
     @Schema(description = "주문 슬롯 정보")
     public static class SlotInfo {
 
-        @Schema(description = "선택된 메뉴", allowableValues = {"일반 메뉴", "특식 메뉴"}, nullable = true)
+        @Schema(description = "선택된 메뉴", nullable = true)
         private String menu;
 
         @Schema(description = "주문 수량", nullable = true, example = "2")

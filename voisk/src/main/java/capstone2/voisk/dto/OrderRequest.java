@@ -13,6 +13,6 @@ public class OrderRequest {
     @Schema(description = "식당 ID. 생략하면 가장 최근 캐싱된 식당 메뉴 정보를 사용합니다.", example = "1")
     private Long restaurantId;
 
-    @Schema(description = "사용자 음성 인식 텍스트", example = "일반 메뉴 2개 주세요")
+    @Schema(description = "사용자 음성 인식 텍스트", example = "슈크림 라떼 2개 주세요")
     private String input;
 }
