@@ -43,4 +43,7 @@ public class OptionItem {
 
     @OneToMany(mappedBy = "parentOptionItem")
     private List<OptionGroup> childOptionGroups = new ArrayList<>();
+
+    @OneToMany(mappedBy = "optionItem")
+    private List<OptionItemAlias> aliases = new ArrayList<>();
 }

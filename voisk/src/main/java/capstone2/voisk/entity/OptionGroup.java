@@ -44,4 +44,7 @@ public class OptionGroup {
 
     @OneToMany(mappedBy = "optionGroup")
     private List<OptionItem> optionItems = new ArrayList<>();
+
+    @OneToMany(mappedBy = "optionGroup")
+    private List<OptionGroupAlias> aliases = new ArrayList<>();
 }

@@ -33,6 +33,7 @@ public record MenuCacheResponse(
             Long optionGroupId,
             Long parentOptionItemId,
             String name,
+            List<String> aliases,
             Boolean isRequired,
             Integer minSelect,
             Integer maxSelect,
@@ -44,6 +45,7 @@ public record MenuCacheResponse(
     public record OptionItemInfo(
             Long optionItemId,
             String name,
+            List<String> aliases,
             Integer extraPrice,
             Boolean isAvailable,
             Integer defaultQuantity,

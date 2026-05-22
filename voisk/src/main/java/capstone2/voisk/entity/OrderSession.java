@@ -61,11 +61,19 @@ public class OrderSession {
     @Transient
     private Set<Long> selectedOptionItemIds = new LinkedHashSet<>();
 
+    @Transient
+    private String pendingOptionText;
+
+    @Transient
+    private Long pendingOptionalGroupId;
+
     public void reset() {
         this.menu = null;
         this.quantity = null;
         this.menuId = null;
         this.selectedOptionItemIds = new LinkedHashSet<>();
+        this.pendingOptionText = null;
+        this.pendingOptionalGroupId = null;
         this.status = OrderStatus.ORDERING;
     }
 

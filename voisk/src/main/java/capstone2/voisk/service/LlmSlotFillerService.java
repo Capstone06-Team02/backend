@@ -88,7 +88,7 @@ public class LlmSlotFillerService {
     ) {
         Optional<MenuCacheResponse.MenuInfo> menu = findMenu(input, catalog);
         Integer quantity = extractQuantity(input);
-        String option = findOptions(input, catalog);
+        String option = findOptions(input, catalog, session);
 
         if (containsAny(input, CANCEL_KW)) {
             return new SlotExtractionResult("CANCEL", menu.map(MenuCacheResponse.MenuInfo::name).orElse(null), null, option);
@@ -120,13 +120,30 @@ public class LlmSlotFillerService {
                 .findFirst();
     }
 
-    private String findOptions(String input, Optional<MenuCacheResponse> catalog) {
-        String normalizedInput = normalize(input);
-        List<String> options = catalog.stream()
+    private List<MenuCacheResponse.MenuInfo> menusForSession(
+            Optional<MenuCacheResponse> catalog,
+            OrderSession session
+    ) {
+        List<MenuCacheResponse.MenuInfo> menus = catalog.stream()
                 .flatMap(response -> response.menus().stream())
+                .toList();
+        if (session == null || (session.getMenuId() == null && session.getMenu() == null)) {
+            return menus;
+        }
+        List<MenuCacheResponse.MenuInfo> selectedMenus = menus.stream()
+                .filter(menu -> session.getMenuId() != null
+                        ? session.getMenuId().equals(menu.menuId())
+                        : normalize(menu.name()).equals(normalize(session.getMenu())))
+                .toList();
+        return selectedMenus.isEmpty() ? menus : selectedMenus;
+    }
+
+    private String findOptions(String input, Optional<MenuCacheResponse> catalog, OrderSession session) {
+        String normalizedInput = normalize(input);
+        List<String> options = menusForSession(catalog, session).stream()
                 .flatMap(menu -> emptyIfNull(menu.optionGroups()).stream())
                 .flatMap(group -> emptyIfNull(group.optionItems()).stream())
-                .filter(item -> normalizedInput.contains(normalize(item.name())))
+                .filter(item -> matchesNameOrAlias(normalizedInput, item.name(), item.aliases()))
                 .map(MenuCacheResponse.OptionItemInfo::name)
                 .distinct()
                 .toList();
@@ -210,28 +227,45 @@ public class LlmSlotFillerService {
                 session == null ? null : session.getRestaurantId(),
                 session == null ? null : session.getMenu(),
                 session == null ? null : session.getQuantity(),
-                catalog.map(this::formatCatalog).orElse("캐시된 메뉴 데이터 없음"),
+                catalog.map(value -> formatCatalog(value, session)).orElse("캐시된 메뉴 데이터 없음"),
                 userInput
         );
     }
 
-    private String formatCatalog(MenuCacheResponse catalog) {
-        return catalog.menus().stream()
+    private String formatCatalog(MenuCacheResponse catalog, OrderSession session) {
+        return menusForSession(Optional.of(catalog), session).stream()
                 .map(menu -> "- 메뉴: %s\n  옵션:\n%s".formatted(menu.name(), formatOptionGroups(menu)))
                 .collect(Collectors.joining("\n"));
     }
 
     private String formatOptionGroups(MenuCacheResponse.MenuInfo menu) {
         String groups = emptyIfNull(menu.optionGroups()).stream()
-                .map(group -> "  - %s%s: %s".formatted(
+                .map(group -> "  - %s%s%s: %s".formatted(
                         group.name(),
+                        formatAliases(group.aliases()),
                         group.parentOptionItemId() == null ? "" : " (parentOptionItemId=" + group.parentOptionItemId() + ")",
                         emptyIfNull(group.optionItems()).stream()
-                                .map(MenuCacheResponse.OptionItemInfo::name)
+                                .map(item -> item.name() + formatAliases(item.aliases()))
                                 .collect(Collectors.joining(", "))
                 ))
                 .collect(Collectors.joining("\n"));
         return groups.isBlank() ? "  - 옵션 없음" : groups;
+    }
+
+    private boolean matchesNameOrAlias(String normalizedInput, String name, Collection<String> aliases) {
+        if (normalizedInput.contains(normalize(name))) {
+            return true;
+        }
+        return emptyIfNull(aliases).stream()
+                .map(this::normalize)
+                .anyMatch(normalizedInput::contains);
+    }
+
+    private String formatAliases(Collection<String> aliases) {
+        List<String> values = emptyIfNull(aliases).stream()
+                .filter(alias -> alias != null && !alias.isBlank())
+                .toList();
+        return values.isEmpty() ? "" : " (alias: " + String.join(", ", values) + ")";
     }
 
     private boolean containsAny(String text, List<String> keywords) {

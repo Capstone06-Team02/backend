@@ -3,7 +3,9 @@ package capstone2.voisk.service;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.entity.Category;
 import capstone2.voisk.entity.Menu;
+import capstone2.voisk.entity.OptionGroupAlias;
 import capstone2.voisk.entity.OptionGroup;
+import capstone2.voisk.entity.OptionItemAlias;
 import capstone2.voisk.entity.OptionItem;
 import capstone2.voisk.entity.Store;
 import capstone2.voisk.repository.MenuRepository;
@@ -93,6 +95,9 @@ public class StoreMenuCacheService {
                 optionGroup.getId(),
                 parentOptionItem == null ? null : parentOptionItem.getId(),
                 optionGroup.getName(),
+                emptyIfNull(optionGroup.getAliases()).stream()
+                        .map(OptionGroupAlias::getAlias)
+                        .toList(),
                 optionGroup.getIsRequired(),
                 optionGroup.getMinSelect(),
                 optionGroup.getMaxSelect(),
@@ -107,6 +112,9 @@ public class StoreMenuCacheService {
         return new MenuCacheResponse.OptionItemInfo(
                 optionItem.getId(),
                 optionItem.getName(),
+                emptyIfNull(optionItem.getAliases()).stream()
+                        .map(OptionItemAlias::getAlias)
+                        .toList(),
                 optionItem.getExtraPrice(),
                 optionItem.getIsAvailable(),
                 optionItem.getDefaultQuantity(),
