@@ -5,18 +5,33 @@ import capstone2.voisk.dto.OptionSlot;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
+import capstone2.voisk.entity.Menu;
+import capstone2.voisk.entity.OptionItem;
+import capstone2.voisk.entity.OrderMenu;
+import capstone2.voisk.entity.OrderMenuOption;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
+import capstone2.voisk.entity.Store;
+import capstone2.voisk.repository.MenuRepository;
+import capstone2.voisk.repository.OptionItemRepository;
+import capstone2.voisk.repository.OrderMenuOptionRepository;
+import capstone2.voisk.repository.OrderMenuRepository;
+import capstone2.voisk.repository.OrderSessionRepository;
+import capstone2.voisk.repository.StoreRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
@@ -49,8 +64,15 @@ public class OrderService {
 
     private final StoreMenuCacheService storeMenuCacheService;
     private final LlmSlotFillerService llmSlotFillerService;
+    private final StoreRepository storeRepository;
+    private final MenuRepository menuRepository;
+    private final OptionItemRepository optionItemRepository;
+    private final OrderSessionRepository orderSessionRepository;
+    private final OrderMenuRepository orderMenuRepository;
+    private final OrderMenuOptionRepository orderMenuOptionRepository;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
 
+    @Transactional
     public OrderResponse process(OrderRequest request) {
         String sid = resolveId(request.getSessionId());
         OrderSession session = sessions.computeIfAbsent(sid, ignored -> newSession());
@@ -68,7 +90,7 @@ public class OrderService {
 
         if (session.getStatus() == OrderStatus.DONE) {
             Long restaurantId = session.getRestaurantId();
-            session.reset();
+            session.resetCurrentItem();
             session.setRestaurantId(restaurantId);
         }
 
@@ -94,6 +116,7 @@ public class OrderService {
                     List.of());
         }
 
+        seedPendingMenusFromText(currentOptionText, session, catalog);
         fillMenuAndQuantitySlots(text, session, catalog, extracted);
         optionText = mergeOptionText(session.getPendingOptionText(), currentOptionText);
 
@@ -148,6 +171,7 @@ public class OrderService {
     ) {
         Optional<MenuCacheResponse.MenuInfo> selectedMenu = findSelectedMenu(catalog, session);
         List<OptionSlot> activeSlots = List.of();
+        List<MenuCacheResponse.OptionGroupInfo> optionalGroups = List.of();
         boolean requiredPhase = false;
         if (selectedMenu.isPresent()) {
             MenuCacheResponse.MenuInfo menu = selectedMenu.get();
@@ -155,15 +179,19 @@ public class OrderService {
             session.setSelectedOptionItemIds(new LinkedHashSet<>(selected));
             List<OptionSlot> requiredSlots = requiredOptionSlots(menu, selected);
             requiredPhase = !requiredSlots.isEmpty();
-            activeSlots = requiredPhase ? requiredSlots : optionalOptionSlots(menu, selected);
+            optionalGroups = optionalOptionGroups(menu, selected);
+            activeSlots = requiredPhase ? requiredSlots : optionalGroups.stream()
+                    .map(group -> toOptionSlot(group, selected))
+                    .toList();
         }
 
         if (activeSlots.isEmpty()) {
-            session.setStatus(OrderStatus.DONE);
-            return build(sid, intent, session,
-                    String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity()),
-                    List.of(),
-                    List.of());
+            return selectedMenu
+                    .map(menu -> completeCurrentItemAndContinue(sid, intent, session, menu))
+                    .orElseGet(() -> build(sid, intent, session,
+                            String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity()),
+                            List.of(),
+                            List.of()));
         }
 
         session.setStatus(OrderStatus.OPTION_FILLING);
@@ -180,8 +208,8 @@ public class OrderService {
                         session.getMenu(), session.getQuantity(), requiredOptionPrompt(activeSlots))
                         : String.format("%s %d개로 확인했습니다. 추가 옵션을 선택하거나 확인해 주세요.",
                         session.getMenu(), session.getQuantity()),
-                quickRepliesForOptions(activeSlots, requiredPhase),
-                activeSlots);
+                requiredPhase ? quickRepliesForOptions(activeSlots, true) : quickRepliesForOptionalGroups(optionalGroups),
+                requiredPhase ? activeSlots : List.of());
     }
 
     private OrderResponse handleOptionUtterance(
@@ -206,11 +234,7 @@ public class OrderService {
         boolean requiredOptionsCompleteBefore = requiredGroupsBefore.isEmpty();
 
         if (requiredOptionsCompleteBefore && "CONFIRM".equals(intent)) {
-            session.setStatus(OrderStatus.DONE);
-            return build(sid, intent, session,
-                    String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity()),
-                    List.of(),
-                    List.of());
+            return completeCurrentItemAndContinue(sid, intent, session, menu);
         }
 
         List<MenuCacheResponse.OptionGroupInfo> selectableGroups = requiredOptionsCompleteBefore
@@ -233,11 +257,7 @@ public class OrderService {
 
         List<MenuCacheResponse.OptionGroupInfo> optionalGroups = optionalOptionGroups(menu, selected);
         if (optionalGroups.isEmpty()) {
-            session.setStatus(OrderStatus.DONE);
-            return build(sid, intent, session,
-                    String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity()),
-                    List.of(),
-                    List.of());
+            return completeCurrentItemAndContinue(sid, intent, session, menu);
         }
 
         return build(sid, intent, session,
@@ -255,11 +275,7 @@ public class OrderService {
             List<MenuCacheResponse.OptionGroupInfo> optionalGroups
     ) {
         if (optionalGroups.isEmpty()) {
-            session.setStatus(OrderStatus.DONE);
-            return build(sid, intent, session,
-                    String.format("주문 완료되었습니다. %s %d개 나올게요!", session.getMenu(), session.getQuantity()),
-                    List.of(),
-                    List.of());
+            return completeCurrentItemAndContinue(sid, intent, session, menu);
         }
 
         Optional<MenuCacheResponse.OptionGroupInfo> selectedGroup = findPendingOptionalGroup(session, optionalGroups)
@@ -332,6 +348,67 @@ public class OrderService {
 
         pruneInactiveSelections(selected, menu);
         session.setSelectedOptionItemIds(new LinkedHashSet<>(selected));
+    }
+
+    private void seedPendingMenusFromText(
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (session.getMenu() != null || !pendingMenuItems(session).isEmpty()) {
+            return;
+        }
+        List<MenuCacheResponse.MenuInfo> menus = findMenusInText(text, catalog);
+        if (menus.size() < 2) {
+            return;
+        }
+
+        MenuCacheResponse.MenuInfo firstMenu = menus.get(0);
+        session.setMenu(firstMenu.name());
+        session.setMenuId(firstMenu.menuId());
+        session.setQuantity(1);
+        session.setPendingOptionText(text);
+
+        menus.stream()
+                .skip(1)
+                .forEach(menu -> pendingMenuItems(session).addLast(
+                        new OrderSession.PendingMenuItem(menu.menuId(), menu.name(), 1, null)
+                ));
+    }
+
+    private List<MenuCacheResponse.MenuInfo> findMenusInText(
+            String text,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        String normalizedText = normalize(text);
+        List<MatchedMenu> matches = catalog.stream()
+                .flatMap(response -> response.menus().stream())
+                .filter(menu -> menu.name() != null && !menu.name().isBlank())
+                .map(menu -> {
+                    String normalizedMenuName = normalize(menu.name());
+                    int start = normalizedText.indexOf(normalizedMenuName);
+                    return new MatchedMenu(menu, start, start + normalizedMenuName.length());
+                })
+                .filter(match -> match.start() >= 0)
+                .sorted(Comparator
+                        .comparingInt(MatchedMenu::start)
+                        .thenComparing(match -> match.end() - match.start(), Comparator.reverseOrder()))
+                .toList();
+
+        List<MatchedMenu> nonOverlappingMatches = new java.util.ArrayList<>();
+        for (MatchedMenu match : matches) {
+            boolean overlaps = nonOverlappingMatches.stream()
+                    .anyMatch(existing -> match.start() < existing.end() && existing.start() < match.end());
+            if (!overlaps) {
+                nonOverlappingMatches.add(match);
+            }
+        }
+        return nonOverlappingMatches.stream()
+                .map(MatchedMenu::menu)
+                .toList();
+    }
+
+    private record MatchedMenu(MenuCacheResponse.MenuInfo menu, int start, int end) {
     }
 
     private boolean hasOptionSelection(String text, Optional<MenuCacheResponse> catalog, OrderSession session) {
@@ -696,10 +773,7 @@ public class OrderService {
     }
 
     private Optional<MenuCacheResponse.MenuInfo> findMenuInText(String text, Optional<MenuCacheResponse> catalog) {
-        String normalizedText = normalize(text);
-        return catalog.stream()
-                .flatMap(response -> response.menus().stream())
-                .filter(menu -> normalizedText.contains(normalize(menu.name())))
+        return findMenusInText(text, catalog).stream()
                 .findFirst();
     }
 
@@ -888,6 +962,7 @@ public class OrderService {
             List<OptionSlot> optionSlots
     ) {
         boolean slotsComplete = session.isSlotsComplete() && session.getStatus() != OrderStatus.OPTION_FILLING;
+        OrderResponse.PriceInfo priceInfo = calculatePrice(session);
         return OrderResponse.builder()
                 .sessionId(sid)
                 .intent(intent)
@@ -897,8 +972,161 @@ public class OrderService {
                         .quantity(session.getQuantity())
                         .optionSlots(optionSlots)
                         .build())
+                .price(priceInfo)
                 .slotsComplete(slotsComplete)
                 .quickReplies(quickReplies)
                 .build();
+    }
+
+    private OrderResponse.PriceInfo calculatePrice(OrderSession session) {
+        Optional<MenuCacheResponse.MenuInfo> selectedMenu = findSelectedMenu(resolveCatalog(session), session);
+        if (selectedMenu.isEmpty()) {
+            Integer accumulatedTotalPrice = accumulatedTotalPrice(session);
+            session.setTotalPrice(accumulatedTotalPrice == 0 ? null : accumulatedTotalPrice);
+            return accumulatedTotalPrice == 0 ? null : OrderResponse.PriceInfo.builder()
+                    .menuPrice(null)
+                    .optionExtraPrice(null)
+                    .unitPrice(null)
+                    .totalPrice(accumulatedTotalPrice)
+                    .build();
+        }
+
+        MenuCacheResponse.MenuInfo menu = selectedMenu.get();
+        int menuPrice = menuPrice(menu);
+        int optionExtraPrice = optionExtraPrice(session, menu);
+        int unitPrice = menuPrice + optionExtraPrice;
+        Integer currentLineTotal = session.getQuantity() == null || session.isCurrentItemFinalized()
+                ? null
+                : unitPrice * session.getQuantity();
+        int totalPrice = accumulatedTotalPrice(session) + (currentLineTotal == null ? 0 : currentLineTotal);
+        session.setTotalPrice(totalPrice);
+
+        return OrderResponse.PriceInfo.builder()
+                .menuPrice(menuPrice)
+                .optionExtraPrice(optionExtraPrice)
+                .unitPrice(unitPrice)
+                .totalPrice(totalPrice)
+                .build();
+    }
+
+    private void completeCurrentItem(OrderSession session, MenuCacheResponse.MenuInfo menu) {
+        if (session.isCurrentItemFinalized() || session.getQuantity() == null) {
+            return;
+        }
+        int unitPrice = menuPrice(menu) + optionExtraPrice(session, menu);
+        int lineTotal = unitPrice * session.getQuantity();
+        session.setAccumulatedTotalPrice(accumulatedTotalPrice(session) + lineTotal);
+        session.setTotalPrice(session.getAccumulatedTotalPrice());
+        persistCompletedItem(session, menu, unitPrice);
+        session.setCurrentItemFinalized(true);
+    }
+
+    private OrderResponse completeCurrentItemAndContinue(
+            String sid,
+            String intent,
+            OrderSession session,
+            MenuCacheResponse.MenuInfo menu
+    ) {
+        String completedMenu = session.getMenu();
+        Integer completedQuantity = session.getQuantity();
+        completeCurrentItem(session, menu);
+
+        if (startNextPendingMenu(session)) {
+            session.setStatus(OrderStatus.CONFIRMING);
+            saveOrderSessionState(session);
+            return build(sid, intent, session,
+                    String.format("%s %d개 담았습니다. 다음 메뉴는 %s %d개 맞으시죠? 확인해 주세요.",
+                            completedMenu, completedQuantity, session.getMenu(), session.getQuantity()),
+                    List.of("네", "아니요"),
+                    List.of());
+        }
+
+        session.setStatus(OrderStatus.DONE);
+        saveOrderSessionState(session);
+        return build(sid, intent, session,
+                String.format("주문 완료되었습니다. %s %d개 나올게요!", completedMenu, completedQuantity),
+                List.of(),
+                List.of());
+    }
+
+    private boolean startNextPendingMenu(OrderSession session) {
+        OrderSession.PendingMenuItem pendingMenuItem = pendingMenuItems(session).pollFirst();
+        if (pendingMenuItem == null) {
+            return false;
+        }
+
+        session.resetCurrentItem();
+        session.setMenuId(pendingMenuItem.getMenuId());
+        session.setMenu(pendingMenuItem.getMenu());
+        session.setQuantity(pendingMenuItem.getQuantity());
+        session.setPendingOptionText(pendingMenuItem.getPendingOptionText());
+        return true;
+    }
+
+    private Deque<OrderSession.PendingMenuItem> pendingMenuItems(OrderSession session) {
+        if (session.getPendingMenuItems() == null) {
+            session.setPendingMenuItems(new ArrayDeque<>());
+        }
+        return session.getPendingMenuItems();
+    }
+
+    private int menuPrice(MenuCacheResponse.MenuInfo menu) {
+        return menu.price() == null ? 0 : menu.price();
+    }
+
+    private void persistCompletedItem(OrderSession session, MenuCacheResponse.MenuInfo menuInfo, int unitPrice) {
+        OrderSession persistentSession = ensurePersistentOrderSession(session);
+        Menu menu = menuRepository.getReferenceById(menuInfo.menuId());
+        OrderMenu orderMenu = orderMenuRepository.save(OrderMenu.builder()
+                .orderSession(persistentSession)
+                .menu(menu)
+                .quantity(session.getQuantity())
+                .priceWithOption(unitPrice)
+                .build());
+
+        selectedOptionIds(session).forEach(optionItemId -> {
+            OptionItem optionItem = optionItemRepository.getReferenceById(optionItemId);
+            orderMenuOptionRepository.save(OrderMenuOption.builder()
+                    .orderMenu(orderMenu)
+                    .optionItem(optionItem)
+                    .quantity(1)
+                    .build());
+        });
+    }
+
+    private OrderSession ensurePersistentOrderSession(OrderSession session) {
+        LocalDateTime now = LocalDateTime.now();
+        if (session.getId() == null) {
+            session.setCreatedAt(now);
+            if (session.getRestaurantId() != null) {
+                Store store = storeRepository.getReferenceById(session.getRestaurantId());
+                session.setStore(store);
+            }
+        }
+        session.setUpdatedAt(now);
+        return orderSessionRepository.save(session);
+    }
+
+    private void saveOrderSessionState(OrderSession session) {
+        if (session.getId() == null) {
+            return;
+        }
+        session.setUpdatedAt(LocalDateTime.now());
+        orderSessionRepository.save(session);
+    }
+
+    private int optionExtraPrice(OrderSession session, MenuCacheResponse.MenuInfo menu) {
+        Set<Long> selectedOptionIds = selectedOptionIds(session);
+        return emptyIfNull(menu.optionGroups()).stream()
+                .flatMap(group -> emptyIfNull(group.optionItems()).stream())
+                .filter(item -> selectedOptionIds.contains(item.optionItemId()))
+                .map(MenuCacheResponse.OptionItemInfo::extraPrice)
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+    }
+
+    private int accumulatedTotalPrice(OrderSession session) {
+        return session.getAccumulatedTotalPrice() == null ? 0 : session.getAccumulatedTotalPrice();
     }
 }

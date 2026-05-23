@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -116,7 +117,13 @@ public class LlmSlotFillerService {
         String normalizedInput = normalize(input);
         return catalog.stream()
                 .flatMap(response -> response.menus().stream())
-                .filter(menu -> normalizedInput.contains(normalize(menu.name())))
+                .filter(menu -> menu.name() != null && !menu.name().isBlank())
+                .map(menu -> Map.entry(menu, normalizedInput.indexOf(normalize(menu.name()))))
+                .filter(entry -> entry.getValue() >= 0)
+                .sorted(Comparator
+                        .comparingInt((Map.Entry<MenuCacheResponse.MenuInfo, Integer> entry) -> entry.getValue())
+                        .thenComparing(entry -> normalize(entry.getKey().name()).length(), Comparator.reverseOrder()))
+                .map(Map.Entry::getKey)
                 .findFirst();
     }
 

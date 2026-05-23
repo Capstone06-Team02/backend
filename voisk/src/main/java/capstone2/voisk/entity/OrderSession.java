@@ -3,6 +3,8 @@ package capstone2.voisk.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -67,17 +69,44 @@ public class OrderSession {
     @Transient
     private Long pendingOptionalGroupId;
 
+    @Transient
+    private Integer accumulatedTotalPrice = 0;
+
+    @Transient
+    private boolean currentItemFinalized;
+
+    @Transient
+    private Deque<PendingMenuItem> pendingMenuItems = new ArrayDeque<>();
+
     public void reset() {
+        resetCurrentItem();
+        this.accumulatedTotalPrice = 0;
+        this.pendingMenuItems = new ArrayDeque<>();
+    }
+
+    public void resetCurrentItem() {
         this.menu = null;
         this.quantity = null;
         this.menuId = null;
         this.selectedOptionItemIds = new LinkedHashSet<>();
         this.pendingOptionText = null;
         this.pendingOptionalGroupId = null;
+        this.currentItemFinalized = false;
         this.status = OrderStatus.ORDERING;
     }
 
     public boolean isSlotsComplete() {
         return this.menu != null && this.quantity != null;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PendingMenuItem {
+        private Long menuId;
+        private String menu;
+        private Integer quantity;
+        private String pendingOptionText;
     }
 }
