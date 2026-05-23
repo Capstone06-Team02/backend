@@ -42,7 +42,7 @@ public class RecommendService {
         Map<Long, Double> similarityMap = rawResults.stream()
                 .collect(Collectors.toMap(
                         r -> ((Number) r[0]).longValue(),
-                        r -> (Double) r[1]
+                        r -> ((Number) r[1]).doubleValue()
                 ));
 
         // Step 4: MySQL 조회 + storeId 필터 (다른 매장 메뉴 제거)
