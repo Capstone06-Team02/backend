@@ -10,7 +10,7 @@ spring:
     postgres:
       url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/voisk_vector}
       username: ${POSTGRES_USERNAME:postgres}
-      password: ${POSTGRES_PASSWORD:voisk1234}
+      password: ${POSTGRES_PASSWORD:1234}
       driver-class-name: org.postgresql.Driver
   jpa:
     open-in-view: false
