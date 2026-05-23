@@ -45,18 +45,10 @@ aws ecr get-login-password --region "${REGION}" | \
     docker login --username AWS --password-stdin \
     "${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
-docker compose -f "${COMPOSE_FILE}" pull fastapi
-docker compose -f "${COMPOSE_FILE}" up -d postgres fastapi
+docker compose -f "${COMPOSE_FILE}" pull fastapi springboot
+docker compose -f "${COMPOSE_FILE}" up -d
 
-# --- 4/4: Spring Boot 실행 ---
-echo "--- 4/4: Spring Boot 실행 ---"
-pkill -f "voisk.*\.jar" || true
-sleep 2
-
-nohup java -jar ~/voisk-backend/voisk-0.0.1-SNAPSHOT.jar \
-    --spring.profiles.active=prod \
-    > ~/voisk-backend/app.log 2>&1 &
-
+echo "--- 4/4: 완료 ---"
 echo "배포 완료!"
 echo "상태 확인: docker ps"
-echo "로그 확인: tail -f ~/voisk-backend/app.log"
+echo "로그 확인: docker logs voisk-springboot"
