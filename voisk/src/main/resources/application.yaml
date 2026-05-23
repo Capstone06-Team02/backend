@@ -28,6 +28,10 @@ embed:
   server:
     url: ${EMBED_SERVER_URL:http://localhost:8000}
 
+boost:
+  w-cat: 0.10
+  w-price: 0.05
+
 gemini:
   api-key: ${GEMINI_API_KEY}
   model: gemini-2.5-flash

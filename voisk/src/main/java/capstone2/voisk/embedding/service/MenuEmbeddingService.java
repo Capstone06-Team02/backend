@@ -25,7 +25,7 @@ public class MenuEmbeddingService {
         float[] vector = embedClient.embed(passageText, false);
 
         MenuEmbedding embedding = MenuEmbedding.builder()
-                .menuId(menu.getId())
+                .menuId(menu.getMenuId())
                 .embedding(vector)
                 .embeddingSource(System.getenv().getOrDefault("EMBED_MODEL", "e5-base")) // 어떤 모델로 생성했는지 기록
                 .build();

@@ -17,7 +17,7 @@ public class Menu {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "menu_id")
-    private Long id;
+    private Long menuId;
 
     @Column(name = "name", length = 100)
     private String name;
@@ -30,6 +30,14 @@ public class Menu {
 
     @Column(name = "is_available")
     private Boolean isAvailable;
+
+    // read-only 스칼라 — store @ManyToOne이 column 소유
+    @Column(name = "store_id", insertable = false, updatable = false)
+    private Long storeId;
+
+    // read-only 스칼라 — category @ManyToOne이 column 소유
+    @Column(name = "category_id", insertable = false, updatable = false)
+    private Long categoryId;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "store_id", nullable = false)

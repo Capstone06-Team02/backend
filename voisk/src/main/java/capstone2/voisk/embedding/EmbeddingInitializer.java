@@ -33,7 +33,7 @@ public class EmbeddingInitializer implements ApplicationRunner {
 
         int created = 0, skipped = 0;
         for (Menu menu : menus) {
-            if (existingIds.contains(menu.getId())) {
+            if (existingIds.contains(menu.getMenuId())) {
                 skipped++;
                 continue;
             }
