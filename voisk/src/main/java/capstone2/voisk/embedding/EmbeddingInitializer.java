@@ -38,15 +38,19 @@ public class EmbeddingInitializer implements ApplicationRunner {
                 continue;
             }
 
-            menuEmbeddingService.saveEmbedding(menu);
-
-            String passageText = EmbeddingTextBuilder.buildPassageText(
-                    menu.getName(), menu.getDescription(), menu.getCategory().getName(), menu.getPrice()
-            );
-            log.info("임베딩 생성 완료: {} → {}",
-                    menu.getName(),
-                    passageText.length() > 50 ? passageText.substring(0, 50) : passageText);
-            created++;
+            try {
+                menuEmbeddingService.saveEmbedding(menu);
+                String passageText = EmbeddingTextBuilder.buildPassageText(
+                        menu.getName(), menu.getDescription(), menu.getCategory().getName(), menu.getPrice()
+                );
+                log.info("임베딩 생성 완료: {} → {}",
+                        menu.getName(),
+                        passageText.length() > 50 ? passageText.substring(0, 50) : passageText);
+                created++;
+            } catch (RuntimeException e) {
+                log.warn("임베딩 생성 실패 (menuId={}): {}", menu.getMenuId(), e.getMessage());
+                skipped++;
+            }
         }
 
         log.info("임베딩 초기화 완료: {}개 생성, {}개 스킵", created, skipped);
