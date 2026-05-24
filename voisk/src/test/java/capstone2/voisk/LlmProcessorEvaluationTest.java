@@ -189,7 +189,7 @@ class LlmProcessorEvaluationTest {
                 .defaultHeader("x-goog-api-key", apiKey)
                 .build();
 
-        service = new LlmSlotFillerService(restClient, props);
+        service = new LlmSlotFillerService(restClient, props, null);
     }
 
     // ── 메인 테스트 ───────────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ class LlmProcessorEvaluationTest {
             TestCase tc = TEST_CASES.get(i);
 
             long start = System.currentTimeMillis();
-            SlotExtractionResult result = service.extract(tc.input(), new OrderSession("test"));
+            SlotExtractionResult result = service.extract(tc.input(), new OrderSession());
             long latencyMs = System.currentTimeMillis() - start;
 
             TestResult tr = new TestResult(tc, result, latencyMs);

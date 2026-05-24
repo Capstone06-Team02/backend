@@ -24,6 +24,6 @@ public class OrderMenuOption {
     private OrderMenu orderMenu;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_item_id", nullable = false)
-    private OptionItem optionItem;
+    @JoinColumn(name = "menu_option_item_id", nullable = false)
+    private MenuOptionItem menuOptionItem;
 }

@@ -53,7 +53,6 @@ class OrderFlowTest {
         session = new OrderSession();
         // ID setting could be needed if id field was string. 
         // OrderSession uses Long id, no SID string is used in constructor.
-        when(sessionRepository.findById(SID)).thenReturn(Optional.of(session));
         when(sessionRepository.save(any(OrderSession.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

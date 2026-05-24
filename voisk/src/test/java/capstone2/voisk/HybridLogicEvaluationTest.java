@@ -173,7 +173,7 @@ class HybridLogicEvaluationTest {
                 .defaultHeader("x-goog-api-key", apiKey)
                 .build();
 
-        service = new LlmSlotFillerService(restClient, props);
+        service = new LlmSlotFillerService(restClient, props, null);
 
         // hybrid.fallback 로거에 ListAppender를 붙여 LLM 호출 여부를 케이스별로 감지
         Logger hybridLogger = (Logger) LoggerFactory.getLogger("hybrid.fallback");
@@ -195,7 +195,7 @@ class HybridLogicEvaluationTest {
             logAppender.list.clear();   // 케이스 시작 전 로그 초기화
 
             long start = System.currentTimeMillis();
-            SlotExtractionResult result = service.extract(tc.input(), new OrderSession("test"));
+            SlotExtractionResult result = service.extract(tc.input(), new OrderSession());
             long latencyMs = System.currentTimeMillis() - start;
 
             // hybrid.fallback 로거에 로그가 찍혔으면 LLM 경로

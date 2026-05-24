@@ -6,14 +6,14 @@ import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.Menu;
-import capstone2.voisk.entity.OptionItem;
+import capstone2.voisk.entity.MenuOptionItem;
 import capstone2.voisk.entity.OrderMenu;
 import capstone2.voisk.entity.OrderMenuOption;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
 import capstone2.voisk.repository.MenuRepository;
-import capstone2.voisk.repository.OptionItemRepository;
+import capstone2.voisk.repository.MenuOptionItemRepository;
 import capstone2.voisk.repository.OrderMenuOptionRepository;
 import capstone2.voisk.repository.OrderMenuRepository;
 import capstone2.voisk.repository.OrderSessionRepository;
@@ -66,7 +66,7 @@ public class OrderService {
     private final LlmSlotFillerService llmSlotFillerService;
     private final StoreRepository storeRepository;
     private final MenuRepository menuRepository;
-    private final OptionItemRepository optionItemRepository;
+    private final MenuOptionItemRepository menuOptionItemRepository;
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
@@ -1085,10 +1085,10 @@ public class OrderService {
                 .build());
 
         selectedOptionIds(session).forEach(optionItemId -> {
-            OptionItem optionItem = optionItemRepository.getReferenceById(optionItemId);
+            MenuOptionItem menuOptionItem = menuOptionItemRepository.getReferenceById(optionItemId);
             orderMenuOptionRepository.save(OrderMenuOption.builder()
                     .orderMenu(orderMenu)
-                    .optionItem(optionItem)
+                    .menuOptionItem(menuOptionItem)
                     .quantity(1)
                     .build());
         });

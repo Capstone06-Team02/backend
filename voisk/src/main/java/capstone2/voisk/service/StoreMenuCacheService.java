@@ -3,10 +3,10 @@ package capstone2.voisk.service;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.entity.Category;
 import capstone2.voisk.entity.Menu;
-import capstone2.voisk.entity.OptionGroupAlias;
-import capstone2.voisk.entity.OptionGroup;
-import capstone2.voisk.entity.OptionItemAlias;
-import capstone2.voisk.entity.OptionItem;
+import capstone2.voisk.entity.MenuOptionGroup;
+import capstone2.voisk.entity.MenuOptionItem;
+import capstone2.voisk.entity.OptionGroupTemplateAlias;
+import capstone2.voisk.entity.OptionItemTemplateAlias;
 import capstone2.voisk.entity.Store;
 import capstone2.voisk.repository.MenuRepository;
 import capstone2.voisk.repository.StoreRepository;
@@ -72,7 +72,8 @@ public class StoreMenuCacheService {
                 menu.getDescription(),
                 menu.getIsAvailable(),
                 toCategoryInfo(menu.getCategory()),
-                emptyIfNull(menu.getOptionGroups()).stream()
+                emptyIfNull(menu.getMenuOptionGroups()).stream()
+                        .sorted((left, right) -> compareSortOrder(left.getSortOrder(), right.getSortOrder()))
                         .map(this::toOptionGroupInfo)
                         .toList()
         );
@@ -89,31 +90,32 @@ public class StoreMenuCacheService {
         );
     }
 
-    private MenuCacheResponse.OptionGroupInfo toOptionGroupInfo(OptionGroup optionGroup) {
-        OptionItem parentOptionItem = optionGroup.getParentOptionItem();
+    private MenuCacheResponse.OptionGroupInfo toOptionGroupInfo(MenuOptionGroup optionGroup) {
+        MenuOptionItem parentOptionItem = optionGroup.getParentMenuOptionItem();
         return new MenuCacheResponse.OptionGroupInfo(
                 optionGroup.getId(),
                 parentOptionItem == null ? null : parentOptionItem.getId(),
-                optionGroup.getName(),
-                emptyIfNull(optionGroup.getAliases()).stream()
-                        .map(OptionGroupAlias::getAlias)
+                optionGroup.getOptionGroupTemplate().getName(),
+                emptyIfNull(optionGroup.getOptionGroupTemplate().getAliases()).stream()
+                        .map(OptionGroupTemplateAlias::getAlias)
                         .toList(),
                 optionGroup.getIsRequired(),
                 optionGroup.getMinSelect(),
                 optionGroup.getMaxSelect(),
                 optionGroup.getIsAvailable(),
                 emptyIfNull(optionGroup.getOptionItems()).stream()
+                        .sorted((left, right) -> compareSortOrder(left.getSortOrder(), right.getSortOrder()))
                         .map(this::toOptionItemInfo)
                         .toList()
         );
     }
 
-    private MenuCacheResponse.OptionItemInfo toOptionItemInfo(OptionItem optionItem) {
+    private MenuCacheResponse.OptionItemInfo toOptionItemInfo(MenuOptionItem optionItem) {
         return new MenuCacheResponse.OptionItemInfo(
                 optionItem.getId(),
-                optionItem.getName(),
-                emptyIfNull(optionItem.getAliases()).stream()
-                        .map(OptionItemAlias::getAlias)
+                optionItem.getOptionItemTemplate().getName(),
+                emptyIfNull(optionItem.getOptionItemTemplate().getAliases()).stream()
+                        .map(OptionItemTemplateAlias::getAlias)
                         .toList(),
                 optionItem.getExtraPrice(),
                 optionItem.getIsAvailable(),
@@ -125,5 +127,11 @@ public class StoreMenuCacheService {
 
     private <T> Collection<T> emptyIfNull(Collection<T> values) {
         return values == null ? List.of() : values;
+    }
+
+    private int compareSortOrder(Integer left, Integer right) {
+        int leftValue = left == null ? Integer.MAX_VALUE : left;
+        int rightValue = right == null ? Integer.MAX_VALUE : right;
+        return Integer.compare(leftValue, rightValue);
     }
 }

@@ -41,4 +41,7 @@ public class Menu {
 
     @OneToMany(mappedBy = "menu")
     private List<OptionGroup> optionGroups = new ArrayList<>();
+
+    @OneToMany(mappedBy = "menu")
+    private List<MenuOptionGroup> menuOptionGroups = new ArrayList<>();
 }
