@@ -19,9 +19,9 @@ import java.util.Set;
 public class OrderSession {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "order_session_id")
-    private Long id;
+    private String id;
 
     @Column(name = "total_price")
     private Integer totalPrice;
@@ -60,6 +60,7 @@ public class OrderSession {
     @Transient
     private Long menuId;
 
+    @Builder.Default
     @Transient
     private Set<Long> selectedOptionItemIds = new LinkedHashSet<>();
 
@@ -69,12 +70,14 @@ public class OrderSession {
     @Transient
     private Long pendingOptionalGroupId;
 
+    @Builder.Default
     @Transient
     private Integer accumulatedTotalPrice = 0;
 
     @Transient
     private boolean currentItemFinalized;
 
+    @Builder.Default
     @Transient
     private Deque<PendingMenuItem> pendingMenuItems = new ArrayDeque<>();
 

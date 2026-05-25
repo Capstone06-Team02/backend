@@ -22,9 +22,11 @@ public class Store {
     @Column(name = "name", length = 100)
     private String name;
 
+    @Builder.Default
     @OneToMany(mappedBy = "store")
     private List<Category> categories = new ArrayList<>();
 
+    @Builder.Default
     @OneToMany(mappedBy = "store")
     private List<Menu> menus = new ArrayList<>();
 }

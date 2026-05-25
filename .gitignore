@@ -50,6 +50,7 @@ application-local.yaml
 application-local.yml
 application-secret.yaml
 application-secret.yml
+docker-compose.local.yml
 
 # ── 로그 ─────────────────────────────────────────────────────────────────────
 *.log

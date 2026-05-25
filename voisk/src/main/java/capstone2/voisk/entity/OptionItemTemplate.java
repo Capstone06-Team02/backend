@@ -22,6 +22,7 @@ public class OptionItemTemplate {
     @Column(name = "name", length = 100, nullable = false)
     private String name;
 
+    @Builder.Default
     @OneToMany(mappedBy = "optionItemTemplate")
     private List<OptionItemTemplateAlias> aliases = new ArrayList<>();
 }

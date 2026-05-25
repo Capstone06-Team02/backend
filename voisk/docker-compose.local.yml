@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: voisk-postgres-local
+    environment:
+      POSTGRES_DB: voisk_vector
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: voisk4141
+    volumes:
+      - postgres_local_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_local_data:

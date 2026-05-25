@@ -39,12 +39,14 @@ public class OptionGroup {
     private Menu menu;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_option_item_id")
+    @JoinColumn(name = "parent_option_item_id", nullable = true)
     private OptionItem parentOptionItem;
 
+    @Builder.Default
     @OneToMany(mappedBy = "optionGroup")
     private List<OptionItem> optionItems = new ArrayList<>();
 
+    @Builder.Default
     @OneToMany(mappedBy = "optionGroup")
     private List<OptionGroupAlias> aliases = new ArrayList<>();
 }

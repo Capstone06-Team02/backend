@@ -41,9 +41,11 @@ public class OptionItem {
     @JoinColumn(name = "parent_option_group_id", nullable = false)
     private OptionGroup optionGroup;
 
+    @Builder.Default
     @OneToMany(mappedBy = "parentOptionItem")
     private List<OptionGroup> childOptionGroups = new ArrayList<>();
 
+    @Builder.Default
     @OneToMany(mappedBy = "optionItem")
     private List<OptionItemAlias> aliases = new ArrayList<>();
 }

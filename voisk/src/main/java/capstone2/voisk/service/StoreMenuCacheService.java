@@ -66,7 +66,7 @@ public class StoreMenuCacheService {
 
     private MenuCacheResponse.MenuInfo toMenuInfo(Menu menu) {
         return new MenuCacheResponse.MenuInfo(
-                menu.getId(),
+                menu.getMenuId(),
                 menu.getName(),
                 menu.getPrice(),
                 menu.getDescription(),
@@ -84,7 +84,7 @@ public class StoreMenuCacheService {
             return null;
         }
         return new MenuCacheResponse.CategoryInfo(
-                category.getId(),
+                category.getCategoryId(),
                 category.getName(),
                 category.getDepth()
         );

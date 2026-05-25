@@ -25,6 +25,7 @@ public class OptionGroupTemplate {
     @Column(name = "description")
     private String description;
 
+    @Builder.Default
     @OneToMany(mappedBy = "optionGroupTemplate")
     private List<OptionGroupTemplateAlias> aliases = new ArrayList<>();
 }

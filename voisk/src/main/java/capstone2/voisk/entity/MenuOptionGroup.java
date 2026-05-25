@@ -49,6 +49,7 @@ public class MenuOptionGroup {
     @JoinColumn(name = "parent_menu_option_item_id")
     private MenuOptionItem parentMenuOptionItem;
 
+    @Builder.Default
     @OneToMany(mappedBy = "menuOptionGroup")
     private List<MenuOptionItem> optionItems = new ArrayList<>();
 }
