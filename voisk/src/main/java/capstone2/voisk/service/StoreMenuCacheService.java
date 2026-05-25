@@ -39,7 +39,7 @@ public class StoreMenuCacheService {
         Store store = storeRepository.findById(restaurantId)
                 .orElseThrow(() -> new IllegalArgumentException("Store not found. id=" + restaurantId));
 
-        List<MenuCacheResponse.MenuInfo> menus = menuRepository.findByStoreIdOrderByIdAsc(restaurantId)
+        List<MenuCacheResponse.MenuInfo> menus = menuRepository.findByStoreIdOrderByMenuIdAsc(restaurantId)
                 .stream()
                 .map(this::toMenuInfo)
                 .toList();

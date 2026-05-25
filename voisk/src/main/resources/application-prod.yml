@@ -4,6 +4,9 @@ spring:
       region:
         static: ap-northeast-2
 
+springdoc:
+  server-url: https://api.voisk.cloud
+
 embed:
   server:
     url: http://localhost:8000  # EC2에서 FastAPI 같은 서버

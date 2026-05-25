@@ -18,5 +18,5 @@ public interface MenuRepository extends JpaRepository<Menu, Long> {
     @Query("SELECT m FROM Menu m JOIN FETCH m.category WHERE m.menuId IN :menuIds AND m.storeId = :storeId")
     List<Menu> findByMenuIdsAndStoreId(@Param("menuIds") List<Long> menuIds, @Param("storeId") Long storeId);
 
-	List<Menu> findByStoreIdOrderByIdAsc(Long storeId);
+	List<Menu> findByStoreIdOrderByMenuIdAsc(Long storeId);
 }
