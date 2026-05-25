@@ -39,12 +39,4 @@ public class MenuEmbedding {
 
     @Column(name = "embedding_source")
     private String embeddingSource;
-
-    @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
-    private LocalDateTime createdAt;
-
-    @UpdateTimestamp
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
 }
