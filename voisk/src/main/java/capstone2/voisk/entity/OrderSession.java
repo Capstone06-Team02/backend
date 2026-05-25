@@ -15,9 +15,9 @@ import java.util.List;
 public class OrderSession {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "order_session_id")
-    private Long id;
+    private String id;
 
     @Column(name = "total_price")
     private Integer totalPrice;

@@ -1,0 +1,12 @@
+spring:
+  cloud:
+    aws:
+      region:
+        static: ap-northeast-2
+
+embed:
+  server:
+    url: http://localhost:8000  # EC2에서 FastAPI 같은 서버
+
+gemini:
+  model: gemini-2.5-flash
