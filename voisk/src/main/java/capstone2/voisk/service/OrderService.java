@@ -10,7 +10,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -40,13 +39,17 @@ public class OrderService {
     // ── 진입점 ────────────────────────────────────────────────────────────────
 
     public OrderResponse process(OrderRequest request) {
-        String sid      = resolveId(request.getSessionId());
-        
-        OrderSession session = sessionRepository.findById(sid)
-                .orElseGet(() -> {
-                    OrderSession newSession = new OrderSession();
-                    return sessionRepository.save(newSession);
-                });
+        String sid = request.getSessionId();
+
+        OrderSession session;
+        if (sid == null || sid.isBlank()) {
+            session = sessionRepository.save(new OrderSession());
+            sid = session.getId();
+        } else {
+            session = sessionRepository.findById(sid)
+                    .orElseGet(() -> sessionRepository.save(new OrderSession()));
+            sid = session.getId();
+        }
                 
         String text     = request.getInput() == null ? "" : request.getInput().trim();
         String intent   = classifyIntent(text);
@@ -126,13 +129,6 @@ public class OrderService {
     }
 
     // ── 유틸리티 ─────────────────────────────────────────────────────────────
-
-    // sessionId가 없으면 새 UUID 발급 (클라이언트가 이후 응답의 sessionId를 재사용해야 함)
-    private String resolveId(String sessionId) {
-        return (sessionId == null || sessionId.isBlank())
-                ? UUID.randomUUID().toString()
-                : sessionId;
-    }
 
     private boolean containsAny(String text, List<String> keywords) {
         return keywords.stream().anyMatch(text::contains);
