@@ -34,7 +34,9 @@ public class PostgresDataSourceConfig {
     @Bean
     public DataSource postgresDataSource(
             @Qualifier("postgresDataSourceProperties") DataSourceProperties props) {
-        return props.initializeDataSourceBuilder().build();
+        return props.initializeDataSourceBuilder()
+			.type(com.zaxxer.hikari.HikariDataSource.class)
+			.build();
     }
 
     // 테이블은 외부 직접 생성 → ddl-auto none

@@ -47,6 +47,11 @@ public class Menu {
     @JoinColumn(name = "category_id", nullable = false)
     private Category category;
 
+    @Builder.Default
     @OneToMany(mappedBy = "menu")
     private List<OptionGroup> optionGroups = new ArrayList<>();
+
+    @Builder.Default
+    @OneToMany(mappedBy = "menu")
+    private List<MenuOptionGroup> menuOptionGroups = new ArrayList<>();
 }

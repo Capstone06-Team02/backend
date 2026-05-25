@@ -17,4 +17,6 @@ public interface MenuRepository extends JpaRepository<Menu, Long> {
     // pgvector 검색 결과 ID 목록을 storeId로 필터링 후 category 한 번에 로드
     @Query("SELECT m FROM Menu m JOIN FETCH m.category WHERE m.menuId IN :menuIds AND m.storeId = :storeId")
     List<Menu> findByMenuIdsAndStoreId(@Param("menuIds") List<Long> menuIds, @Param("storeId") Long storeId);
+
+	List<Menu> findByStoreIdOrderByMenuIdAsc(Long storeId);
 }

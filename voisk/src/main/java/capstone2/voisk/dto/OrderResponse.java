@@ -17,11 +17,14 @@ public class OrderResponse {
     @Schema(description = "분류된 사용자 의도", allowableValues = {"ORDER", "CONFIRM", "CANCEL", "UNKNOWN"})
     private String intent;
 
-    @Schema(description = "봇 응답 메시지", example = "일반 메뉴 2개 맞으시죠? 확인해 주세요.")
+    @Schema(description = "봇 응답 메시지", example = "슈크림 라떼 2개 맞으시죠? 확인해 주세요.")
     private String response;
 
     @Schema(description = "현재까지 수집된 슬롯 정보")
     private SlotInfo slots;
+
+    @Schema(description = "현재 주문 가격 정보")
+    private PriceInfo price;
 
     @Schema(description = "메뉴·수량이 모두 채워졌는지 여부")
     private boolean slotsComplete;
@@ -34,10 +37,31 @@ public class OrderResponse {
     @Schema(description = "주문 슬롯 정보")
     public static class SlotInfo {
 
-        @Schema(description = "선택된 메뉴", allowableValues = {"일반 메뉴", "특식 메뉴"}, nullable = true)
+        @Schema(description = "선택된 메뉴", nullable = true)
         private String menu;
 
         @Schema(description = "주문 수량", nullable = true, example = "2")
         private Integer quantity;
+
+        @Schema(description = "메뉴 확정 후 채워야 하는 옵션 슬롯 목록")
+        private List<OptionSlot> optionSlots;
+    }
+
+    @Data
+    @Builder
+    @Schema(description = "주문 가격 정보")
+    public static class PriceInfo {
+
+        @Schema(description = "메뉴 기본 가격", nullable = true)
+        private Integer menuPrice;
+
+        @Schema(description = "선택된 옵션 추가 금액 합계", nullable = true)
+        private Integer optionExtraPrice;
+
+        @Schema(description = "메뉴 1개당 최종 가격", nullable = true)
+        private Integer unitPrice;
+
+        @Schema(description = "수량까지 반영한 총 주문 금액", nullable = true)
+        private Integer totalPrice;
     }
 }

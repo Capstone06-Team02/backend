@@ -1,12 +1,16 @@
 package capstone2.voisk.controller;
 
+import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.service.OrderService;
+import capstone2.voisk.service.StoreMenuCacheService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,9 +20,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/order")
 @RequiredArgsConstructor
+@Slf4j
 public class OrderController {
 
     private final OrderService orderService;
+    private final StoreMenuCacheService storeMenuCacheService;
 
     @Operation(
         summary = "주문 처리",
@@ -27,6 +33,17 @@ public class OrderController {
     )
     @PostMapping("/speak")
     public ResponseEntity<OrderResponse> speak(@RequestBody OrderRequest request) {
-        return ResponseEntity.ok(orderService.process(request));
+        OrderResponse response = orderService.process(request);
+        log.info("speak API slot={}, slotFilling={}", response.getSlots(), !response.isSlotsComplete());
+        return ResponseEntity.ok(response);
+    }
+
+    @Operation(
+        summary = "식당 메뉴 정보 캐싱",
+        description = "식당 id를 받아 해당 식당의 메뉴, 카테고리, 옵션 정보를 백엔드 인메모리 캐시에 저장합니다."
+    )
+    @PostMapping({"/restaurants/{restaurantId}/menus/cache", "/stores/{restaurantId}/menus/cache"})
+    public ResponseEntity<MenuCacheResponse> cacheMenus(@PathVariable Long restaurantId) {
+        return ResponseEntity.ok(storeMenuCacheService.cacheMenus(restaurantId));
     }
 }

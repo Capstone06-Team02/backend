@@ -7,20 +7,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "option_item")
+@Table(name = "menu_option_item")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor
 @Builder
-public class OptionItem {
+public class MenuOptionItem {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "option_item_id")
+    @Column(name = "menu_option_item_id")
     private Long id;
-
-    @Column(name = "name", length = 100)
-    private String name;
 
     @Column(name = "extra_price")
     private Integer extraPrice;
@@ -37,15 +34,21 @@ public class OptionItem {
     @Column(name = "is_default")
     private Boolean isDefault;
 
+    @Column(name = "sort_order")
+    private Integer sortOrder;
+
+    @Column(name = "legacy_option_item_id")
+    private Long legacyOptionItemId;
+
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_option_group_id", nullable = false)
-    private OptionGroup optionGroup;
+    @JoinColumn(name = "menu_option_group_id", nullable = false)
+    private MenuOptionGroup menuOptionGroup;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "option_item_template_id", nullable = false)
+    private OptionItemTemplate optionItemTemplate;
 
     @Builder.Default
-    @OneToMany(mappedBy = "parentOptionItem")
-    private List<OptionGroup> childOptionGroups = new ArrayList<>();
-
-    @Builder.Default
-    @OneToMany(mappedBy = "optionItem")
-    private List<OptionItemAlias> aliases = new ArrayList<>();
+    @OneToMany(mappedBy = "parentMenuOptionItem")
+    private List<MenuOptionGroup> childOptionGroups = new ArrayList<>();
 }

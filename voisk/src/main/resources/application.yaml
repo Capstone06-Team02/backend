@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: voisk
   datasource:
@@ -8,7 +10,7 @@ spring:
       password: ${MYSQL_PASSWORD}
       driver-class-name: com.mysql.cj.jdbc.Driver
     postgres:
-      url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/voisk_vector}
+      url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/voisk_vector?sslmode=disable}
       username: ${POSTGRES_USERNAME:postgres}
       password: ${POSTGRES_PASSWORD:1234}
       driver-class-name: org.postgresql.Driver
@@ -41,3 +43,4 @@ springdoc:
     path: /swagger-ui.html
   api-docs:
     path: /v3/api-docs
+  server-url: http://localhost:8080

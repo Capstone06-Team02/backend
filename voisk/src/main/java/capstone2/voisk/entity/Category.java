@@ -37,9 +37,11 @@ public class Category {
     @JoinColumn(name = "parent_category_id")
     private Category parentCategory;
 
+    @Builder.Default
     @OneToMany(mappedBy = "parentCategory")
     private List<Category> childCategories = new ArrayList<>();
 
+    @Builder.Default
     @OneToMany(mappedBy = "category")
     private List<Menu> menus = new ArrayList<>();
 }

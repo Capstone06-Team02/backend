@@ -7,26 +7,22 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "store")
+@Table(name = "option_item_template")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor
 @Builder
-public class Store {
+public class OptionItemTemplate {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "store_id")
+    @Column(name = "option_item_template_id")
     private Long id;
 
-    @Column(name = "name", length = 100)
+    @Column(name = "name", length = 100, nullable = false)
     private String name;
 
     @Builder.Default
-    @OneToMany(mappedBy = "store")
-    private List<Category> categories = new ArrayList<>();
-
-    @Builder.Default
-    @OneToMany(mappedBy = "store")
-    private List<Menu> menus = new ArrayList<>();
+    @OneToMany(mappedBy = "optionItemTemplate")
+    private List<OptionItemTemplateAlias> aliases = new ArrayList<>();
 }
