@@ -20,7 +20,7 @@ public class OrderSession {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "order_session_id")
+    @Column(name = "order_session_id", length = 36)
     private String id;
 
     @Column(name = "total_price")

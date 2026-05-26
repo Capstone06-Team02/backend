@@ -50,7 +50,6 @@ public class OrderService {
     private static final List<String> CANCEL_KW = List.of("아니", "취소", "다시", "말고");
     private static final List<String> OPTION_REMOVE_KW = List.of("빼", "없이", "제외", "삭제", "안 넣", "넣지 마");
     private static final Pattern QTY_DIGIT = Pattern.compile("(\\d+)\\s*(?:개|잔|인분|명)");
-    private static final List<String> DEFAULT_OPTION_KW = List.of("그대로", "기본", "디폴트", "원래대로");
     private static final Map<String, Integer> KO_QTY = Map.ofEntries(
             Map.entry("하나", 1),
             Map.entry("한", 1),
@@ -333,7 +332,7 @@ public class OrderService {
                 if (Boolean.FALSE.equals(item.isAvailable())) {
                     continue;
                 }
-                if (!optionItemMatchesText(normalizedText, group, item)) {
+                if (!optionItemMatchesText(normalizedText, item)) {
                     continue;
                 }
 
@@ -418,7 +417,7 @@ public class OrderService {
         return findSelectedMenu(catalog, session)
                 .map(menu -> activeOptionGroups(menu, selectedOptionIds(session)).stream()
                         .anyMatch(group -> emptyIfNull(group.optionItems()).stream()
-                                .anyMatch(item -> optionItemMatchesText(normalizedText, group, item))))
+                                .anyMatch(item -> optionItemMatchesText(normalizedText, item))))
                 .orElse(false);
     }
 
@@ -428,7 +427,7 @@ public class OrderService {
                 .flatMap(response -> response.menus().stream())
                 .flatMap(menu -> emptyIfNull(menu.optionGroups()).stream())
                 .anyMatch(group -> emptyIfNull(group.optionItems()).stream()
-                        .anyMatch(item -> optionItemMatchesText(normalizedText, group, item)));
+                        .anyMatch(item -> optionItemMatchesText(normalizedText, item)));
     }
 
     private boolean hasPendingOptionText(String optionText, Optional<MenuCacheResponse> catalog, OrderSession session) {
@@ -464,73 +463,9 @@ public class OrderService {
 
     private boolean optionItemMatchesText(
             String normalizedText,
-            MenuCacheResponse.OptionGroupInfo group,
             MenuCacheResponse.OptionItemInfo item
     ) {
-        String normalizedItemName = normalize(item.name());
-        if (matchesNameOrAlias(normalizedText, item.name(), item.aliases())) {
-            return true;
-        }
-        if (matchesTemperatureAlias(normalizedText, normalizedItemName)) {
-            return true;
-        }
-        if (matchesCaffeineAlias(normalizedText, normalizedItemName)) {
-            return true;
-        }
-        return isDefaultOption(item)
-                && optionGroupMatchesText(normalizedText, group)
-                && containsAnyNormalized(normalizedText, DEFAULT_OPTION_KW);
-    }
-
-    private boolean matchesTemperatureAlias(String normalizedText, String normalizedItemName) {
-        boolean hotItem = normalizedItemName.equals("hot")
-                || normalizedItemName.contains("핫")
-                || normalizedItemName.contains("뜨거");
-        boolean hotText = normalizedText.contains("hot")
-                || normalizedText.contains("핫")
-                || normalizedText.contains("뜨거");
-        if (hotItem && hotText) {
-            return true;
-        }
-
-        boolean icedItem = normalizedItemName.equals("ice")
-                || normalizedItemName.equals("iced")
-                || normalizedItemName.contains("아이스")
-                || normalizedItemName.contains("차가");
-        boolean icedText = normalizedText.contains("ice")
-                || normalizedText.contains("iced")
-                || normalizedText.contains("아이스")
-                || normalizedText.contains("차가");
-        return icedItem && icedText;
-    }
-
-    private boolean matchesCaffeineAlias(String normalizedText, String normalizedItemName) {
-        boolean decafItem = normalizedItemName.contains("디카페인")
-                || normalizedItemName.contains("decaf")
-                || normalizedItemName.contains("디카");
-        boolean decafText = normalizedText.contains("디카페인")
-                || normalizedText.contains("decaf")
-                || normalizedText.contains("디카");
-        if (decafItem && decafText) {
-            return true;
-        }
-
-        boolean caffeineItem = normalizedItemName.contains("카페인")
-                || normalizedItemName.contains("regular")
-                || normalizedItemName.contains("일반");
-        boolean caffeineText = normalizedText.contains("카페인")
-                || normalizedText.contains("regular")
-                || normalizedText.contains("일반");
-        return caffeineItem && caffeineText && !decafText;
-    }
-
-    private boolean optionGroupMatchesText(String normalizedText, MenuCacheResponse.OptionGroupInfo group) {
-        if (matchesNameOrAlias(normalizedText, group.name(), group.aliases())) {
-            return true;
-        }
-        String normalizedGroupName = normalize(group.name());
-        return List.of("원두", "온도", "사이즈", "얼음", "당도", "샷", "우유").stream()
-                .anyMatch(keyword -> normalizedGroupName.contains(keyword) && normalizedText.contains(keyword));
+        return matchesNameOrAlias(normalizedText, item.name(), item.aliases());
     }
 
     private boolean matchesNameOrAlias(String normalizedText, String name, Collection<String> aliases) {
@@ -541,17 +476,6 @@ public class OrderService {
         return emptyIfNull(aliases).stream()
                 .map(this::normalize)
                 .filter(alias -> !alias.isBlank())
-                .anyMatch(normalizedText::contains);
-    }
-
-    private boolean isDefaultOption(MenuCacheResponse.OptionItemInfo item) {
-        return Boolean.TRUE.equals(item.isDefault())
-                || (item.defaultQuantity() != null && item.defaultQuantity() > 0);
-    }
-
-    private boolean containsAnyNormalized(String normalizedText, List<String> keywords) {
-        return keywords.stream()
-                .map(this::normalize)
                 .anyMatch(normalizedText::contains);
     }
 
