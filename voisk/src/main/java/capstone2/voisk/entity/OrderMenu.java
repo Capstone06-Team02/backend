@@ -32,6 +32,6 @@ public class OrderMenu {
     @JoinColumn(name = "menu_id", nullable = false)
     private Menu menu;
 
-    @OneToMany(mappedBy = "orderMenu")
+    @OneToMany(mappedBy = "orderMenu", cascade = CascadeType.REMOVE, orphanRemoval = true)
     private List<OrderMenuOption> orderMenuOptions;
 }

@@ -43,7 +43,7 @@ public class OrderSession {
     @JoinColumn(name = "store_id")
     private Store store;
 
-    @OneToMany(mappedBy = "orderSession")
+    @OneToMany(mappedBy = "orderSession", cascade = CascadeType.REMOVE, orphanRemoval = true)
     private List<OrderMenu> orderMenus;
 
     // --- 서비스 로직 처리를 위한 Transient(비영속) 필드 및 메서드 추가 ---
