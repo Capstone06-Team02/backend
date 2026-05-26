@@ -1,5 +1,7 @@
 package capstone2.voisk.service;
 
+import capstone2.voisk.converter.OptionSlotConverter;
+import capstone2.voisk.converter.OrderResponseConverter;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.OptionSlot;
 import capstone2.voisk.dto.OrderRequest;
@@ -68,6 +70,8 @@ public class OrderService {
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
+    private final OptionSlotConverter optionSlotConverter;
+    private final OrderResponseConverter orderResponseConverter;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
 
     @Transactional
@@ -179,7 +183,7 @@ public class OrderService {
             requiredPhase = !requiredSlots.isEmpty();
             optionalGroups = optionalOptionGroups(menu, selected);
             activeSlots = requiredPhase ? requiredSlots : optionalGroups.stream()
-                    .map(group -> toOptionSlot(group, selected))
+                    .map(group -> optionSlotConverter.toOptionSlot(group, selected))
                     .toList();
         }
 
@@ -301,7 +305,7 @@ public class OrderService {
             }
 
             session.setPendingOptionalGroupId(group.optionGroupId());
-            OptionSlot optionSlot = toOptionSlot(group, selectedOptionIds(session));
+            OptionSlot optionSlot = optionSlotConverter.toOptionSlot(group, selectedOptionIds(session));
             return build(sid, intent, session,
                     group.name() + " 옵션에서 변경할 값을 선택해 주세요.",
                     quickRepliesForOptions(List.of(optionSlot), false),
@@ -568,20 +572,20 @@ public class OrderService {
 
     private List<OptionSlot> activeOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
         return activeOptionGroups(menu, selectedOptionIds).stream()
-                .map(group -> toOptionSlot(group, selectedOptionIds))
+                .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
                 .toList();
     }
 
     private List<OptionSlot> requiredOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
         return requiredOptionGroups(menu, selectedOptionIds).stream()
                 .limit(1)
-                .map(group -> toOptionSlot(group, selectedOptionIds))
+                .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
                 .toList();
     }
 
     private List<OptionSlot> optionalOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
         return optionalOptionGroups(menu, selectedOptionIds).stream()
-                .map(group -> toOptionSlot(group, selectedOptionIds))
+                .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
                 .toList();
     }
 
@@ -673,30 +677,6 @@ public class OrderService {
         return groups.stream()
                 .filter(group -> activeGroupIds.contains(group.optionGroupId()))
                 .toList();
-    }
-
-    private OptionSlot toOptionSlot(MenuCacheResponse.OptionGroupInfo group, Set<Long> selectedOptionIds) {
-        return new OptionSlot(
-                group.optionGroupId(),
-                group.parentOptionItemId(),
-                group.name(),
-                group.isRequired(),
-                group.minSelect(),
-                group.maxSelect(),
-                emptyIfNull(group.optionItems()).stream()
-                        .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
-                        .map(item -> new OptionSlot.OptionCandidate(
-                                item.optionItemId(),
-                                item.name(),
-                                item.extraPrice(),
-                                item.isAvailable(),
-                                item.defaultQuantity(),
-                                item.maxQuantity(),
-                                item.isDefault(),
-                                selectedOptionIds.contains(item.optionItemId())
-                        ))
-                        .toList()
-        );
     }
 
     private SlotExtractionResult extractSlots(
@@ -959,21 +939,8 @@ public class OrderService {
             List<String> quickReplies,
             List<OptionSlot> optionSlots
     ) {
-        boolean slotsComplete = session.isSlotsComplete() && session.getStatus() != OrderStatus.OPTION_FILLING;
         OrderResponse.PriceInfo priceInfo = calculatePrice(session);
-        return OrderResponse.builder()
-                .sessionId(sid)
-                .intent(intent)
-                .response(message)
-                .slots(OrderResponse.SlotInfo.builder()
-                        .menu(session.getMenu())
-                        .quantity(session.getQuantity())
-                        .optionSlots(optionSlots)
-                        .build())
-                .price(priceInfo)
-                .slotsComplete(slotsComplete)
-                .quickReplies(quickReplies)
-                .build();
+        return orderResponseConverter.toResponse(sid, intent, session, message, quickReplies, optionSlots, priceInfo);
     }
 
     private OrderResponse.PriceInfo calculatePrice(OrderSession session) {
@@ -981,12 +948,9 @@ public class OrderService {
         if (selectedMenu.isEmpty()) {
             Integer accumulatedTotalPrice = accumulatedTotalPrice(session);
             session.setTotalPrice(accumulatedTotalPrice == 0 ? null : accumulatedTotalPrice);
-            return accumulatedTotalPrice == 0 ? null : OrderResponse.PriceInfo.builder()
-                    .menuPrice(null)
-                    .optionExtraPrice(null)
-                    .unitPrice(null)
-                    .totalPrice(accumulatedTotalPrice)
-                    .build();
+            return accumulatedTotalPrice == 0
+                    ? null
+                    : orderResponseConverter.toPriceInfo(null, null, null, accumulatedTotalPrice);
         }
 
         MenuCacheResponse.MenuInfo menu = selectedMenu.get();
@@ -999,12 +963,7 @@ public class OrderService {
         int totalPrice = accumulatedTotalPrice(session) + (currentLineTotal == null ? 0 : currentLineTotal);
         session.setTotalPrice(totalPrice);
 
-        return OrderResponse.PriceInfo.builder()
-                .menuPrice(menuPrice)
-                .optionExtraPrice(optionExtraPrice)
-                .unitPrice(unitPrice)
-                .totalPrice(totalPrice)
-                .build();
+        return orderResponseConverter.toPriceInfo(menuPrice, optionExtraPrice, unitPrice, totalPrice);
     }
 
     private void completeCurrentItem(OrderSession session, MenuCacheResponse.MenuInfo menu) {
