@@ -12,6 +12,7 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addMapping("/api/**")
 				.allowedOrigins(
 					"https://voisk-frontend.vercel.app",
+					"https://voisk-frontend-k6y124t8z-sungjae0309s-projects.vercel.app",
 					"https://voisk.cloud",
 					"https://www.voisk.cloud",
 					"https://api.voisk.cloud",
