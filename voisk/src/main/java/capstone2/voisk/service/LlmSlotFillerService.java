@@ -35,32 +35,25 @@ public class LlmSlotFillerService {
     }
 
     private static final String SYSTEM_PROMPT = """
-            너는 식당 주문 음성 텍스트를 슬롯으로 변환하는 분석기다.
-            반드시 제공된 [현재 식당 캐시 카탈로그] 안의 메뉴명과 옵션명만 사용한다.
-            카탈로그에 없는 메뉴명이나 옵션명은 추측하지 말고 null로 둔다.
+            너는 식당 주문 발화를 서버 슬롯 처리용 JSON으로만 변환한다.
+            설명 문장 없이 아래 JSON 하나만 반환한다.
 
-            반환 형식은 설명 없이 JSON 하나만 사용한다.
             {
               "intent": "ORDER" | "CONFIRM" | "CANCEL" | "UNKNOWN",
-              "menu": "카탈로그의 정확한 메뉴명" | null,
+              "menu": "제공된 메뉴 후보의 정확한 메뉴명" | null,
               "quantity": 숫자 | null,
-              "option": "카탈로그의 옵션명들을 쉼표로 연결" | null,
-              "orderDraft": 현재 주문 draft JSON 또는 null
+              "option": "현재 주문 slot JSON 후보에 있는 정확한 옵션값 이름들을 쉼표로 연결" | null,
+              "orderDraft": null
             }
 
-            판단 기준:
-            - ORDER: 메뉴 선택, 수량 언급, 옵션 선택, 주문 의사
-            - CONFIRM: 현재 서버 질문에 대한 긍정/확정
-            - CANCEL: 취소, 거절, 다시 선택, 다른 것으로 변경
-            - UNKNOWN: 위에 해당하지 않음
-
-            수량은 숫자+개/잔/인분/명 또는 하나/두/세 같은 표현에서만 추출한다.
-            메뉴와 옵션은 카탈로그에 있는 정확한 이름으로 반환한다.
-            orderDraft가 제공되면 새 메뉴를 임의로 만들지 말고, draft 안의 items에서 quantity와 selectedOptionItemId/selectedOptionItemName만 채운다.
-            사용자가 명확히 변경하지 않은 기존 draft 값은 유지한다.
-            The current order slot JSON contains every recognized menu and its optionSlots.
-            Use only candidates in that JSON. Do not create new menus, option groups, or candidates.
-            If the utterance selects a required option, reflect that selection in orderDraft.
+            규칙:
+            - 현재 주문 slot JSON에 있는 메뉴/옵션 후보를 최우선으로 사용한다.
+            - 현재 주문 slot JSON에 없는 새 메뉴가 발화에 있으면 [메뉴 후보]에서만 고른다.
+            - 후보에 없는 메뉴명/옵션명은 추측하지 말고 null로 둔다.
+            - 옵션은 optionGroup 이름이 아니라 candidate 이름을 반환한다. 예: "디카페인", "벤티"
+            - 수량은 숫자+개/잔/인분/명 또는 하나/두/세 같은 표현에서만 추출한다.
+            - 긍정 답변은 CONFIRM, 거절/취소/다시 선택은 CANCEL, 판단이 어려우면 UNKNOWN.
+            - orderDraft는 서버가 관리하므로 항상 null로 둔다.
             """;
 
     private final RestClient geminiRestClient;
@@ -182,7 +175,6 @@ public class LlmSlotFillerService {
                 [현재 주문 slot JSON]
                 %s
 
-                [현재 식당 캐시 카탈로그]
                 %s
 
                 [사용자 발화]
@@ -193,7 +185,7 @@ public class LlmSlotFillerService {
                 session == null ? null : session.getQuantity(),
                 session == null ? null : session.getPreviousUtterance(),
                 formatDraft(session, catalog),
-                catalog.map(value -> formatCatalog(value, session)).orElse("캐시된 메뉴 데이터 없음"),
+                formatMenuCandidateBlock(userInput, session, catalog),
                 userInput
         );
     }
@@ -305,24 +297,32 @@ public class LlmSlotFillerService {
                 || (item.defaultQuantity() != null && item.defaultQuantity() > 0);
     }
 
-    private String formatCatalog(MenuCacheResponse catalog, OrderSession session) {
-        return menusForSession(Optional.of(catalog), session).stream()
-                .map(menu -> "- 메뉴: %s\n  옵션:\n%s".formatted(menu.name(), formatOptionGroups(menu)))
+    private String formatMenuCandidateBlock(
+            String userInput,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (catalog.isEmpty() || !shouldIncludeMenuCandidates(userInput, session)) {
+            return "[메뉴 후보]\n생략";
+        }
+        String candidates = catalog.stream()
+                .flatMap(response -> response.menus().stream())
+                .filter(menu -> !Boolean.FALSE.equals(menu.isAvailable()))
+                .map(menu -> "- " + menu.name())
                 .collect(Collectors.joining("\n"));
+        return "[메뉴 후보]\n" + (candidates.isBlank() ? "없음" : candidates);
     }
 
-    private String formatOptionGroups(MenuCacheResponse.MenuInfo menu) {
-        String groups = emptyIfNull(menu.optionGroups()).stream()
-                .map(group -> "  - %s%s%s: %s".formatted(
-                        group.name(),
-                        formatAliases(group.aliases()),
-                        group.parentOptionItemId() == null ? "" : " (parentOptionItemId=" + group.parentOptionItemId() + ")",
-                        emptyIfNull(group.optionItems()).stream()
-                                .map(item -> item.name() + formatAliases(item.aliases()))
-                                .collect(Collectors.joining(", "))
-                ))
-                .collect(Collectors.joining("\n"));
-        return groups.isBlank() ? "  - 옵션 없음" : groups;
+    private boolean shouldIncludeMenuCandidates(String userInput, OrderSession session) {
+        if (session == null || session.getOrderDraft() == null
+                || session.getOrderDraft().items() == null
+                || session.getOrderDraft().items().isEmpty()) {
+            return true;
+        }
+        String normalizedInput = normalize(userInput);
+        return List.of("추가", "그리고", "또", "랑", "하고", "도").stream()
+                .map(this::normalize)
+                .anyMatch(normalizedInput::contains);
     }
 
     private String formatAliases(Collection<String> aliases) {
