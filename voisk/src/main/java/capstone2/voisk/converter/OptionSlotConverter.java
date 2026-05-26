@@ -12,27 +12,30 @@ import java.util.Set;
 public class OptionSlotConverter {
 
     public OptionSlot toOptionSlot(MenuCacheResponse.OptionGroupInfo group, Set<Long> selectedOptionIds) {
+        MenuCacheResponse.OptionItemInfo selectedOption = emptyIfNull(group.optionItems()).stream()
+                .filter(item -> selectedOptionIds.contains(item.optionItemId()))
+                .findFirst()
+                .orElse(null);
         return new OptionSlot(
-                group.optionGroupId(),
-                group.parentOptionItemId(),
                 group.name(),
                 group.isRequired(),
-                group.minSelect(),
-                group.maxSelect(),
+                selectedOption == null ? null : selectedOption.name(),
+                selectedOption == null ? null : isDefaultSelected(selectedOption),
                 emptyIfNull(group.optionItems()).stream()
                         .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
                         .map(item -> new OptionSlot.OptionCandidate(
-                                item.optionItemId(),
                                 item.name(),
                                 item.extraPrice(),
-                                item.isAvailable(),
-                                item.defaultQuantity(),
-                                item.maxQuantity(),
-                                item.isDefault(),
+                                isDefaultSelected(item),
                                 selectedOptionIds.contains(item.optionItemId())
                         ))
                         .toList()
         );
+    }
+
+    private boolean isDefaultSelected(MenuCacheResponse.OptionItemInfo item) {
+        return Boolean.TRUE.equals(item.isDefault())
+                || (item.defaultQuantity() != null && item.defaultQuantity() > 0);
     }
 
     private <T> Collection<T> emptyIfNull(Collection<T> values) {

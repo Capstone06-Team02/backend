@@ -2,8 +2,10 @@ package capstone2.voisk.service;
 
 import capstone2.voisk.config.GeminiProperties;
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.OrderSession;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -13,12 +15,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.util.Collection;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -27,21 +29,10 @@ import java.util.stream.Collectors;
 public class LlmSlotFillerService {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final List<String> ORDER_KW = List.of("주세요", "줘", "먹을게", "주문", "할게", "담아");
-    private static final List<String> CONFIRM_KW = List.of("네", "예", "맞아", "맞아요", "확인", "응", "좋아");
-    private static final List<String> CANCEL_KW = List.of("아니", "취소", "다시", "말고", "됐어");
-    private static final Pattern QTY_DIGIT = Pattern.compile("(\\d+)\\s*(?:개|잔|인분|명)");
-    private static final Map<String, Integer> KO_QTY = Map.ofEntries(
-            Map.entry("하나", 1),
-            Map.entry("한", 1),
-            Map.entry("둘", 2),
-            Map.entry("두", 2),
-            Map.entry("셋", 3),
-            Map.entry("세", 3),
-            Map.entry("넷", 4),
-            Map.entry("다섯", 5),
-            Map.entry("열", 10)
-    );
+
+    static {
+        MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    }
 
     private static final String SYSTEM_PROMPT = """
             너는 식당 주문 음성 텍스트를 슬롯으로 변환하는 분석기다.
@@ -53,7 +44,8 @@ public class LlmSlotFillerService {
               "intent": "ORDER" | "CONFIRM" | "CANCEL" | "UNKNOWN",
               "menu": "카탈로그의 정확한 메뉴명" | null,
               "quantity": 숫자 | null,
-              "option": "카탈로그의 옵션명들을 쉼표로 연결" | null
+              "option": "카탈로그의 옵션명들을 쉼표로 연결" | null,
+              "orderDraft": 현재 주문 draft JSON 또는 null
             }
 
             판단 기준:
@@ -64,6 +56,11 @@ public class LlmSlotFillerService {
 
             수량은 숫자+개/잔/인분/명 또는 하나/두/세 같은 표현에서만 추출한다.
             메뉴와 옵션은 카탈로그에 있는 정확한 이름으로 반환한다.
+            orderDraft가 제공되면 새 메뉴를 임의로 만들지 말고, draft 안의 items에서 quantity와 selectedOptionItemId/selectedOptionItemName만 채운다.
+            사용자가 명확히 변경하지 않은 기존 draft 값은 유지한다.
+            The current order slot JSON contains every recognized menu and its optionSlots.
+            Use only candidates in that JSON. Do not create new menus, option groups, or candidates.
+            If the utterance selects a required option, reflect that selection in orderDraft.
             """;
 
     private final RestClient geminiRestClient;
@@ -73,34 +70,7 @@ public class LlmSlotFillerService {
     public SlotExtractionResult extract(String userInput, OrderSession session) {
         String input = userInput == null ? "" : userInput.trim();
         Optional<MenuCacheResponse> catalog = resolveCatalog(session);
-
-        SlotExtractionResult ruleResult = extractFromCachedCatalog(input, session, catalog);
-        if (!"UNKNOWN".equals(ruleResult.intent())) {
-            return ruleResult;
-        }
-
         return callGemini(input, session, catalog);
-    }
-
-    private SlotExtractionResult extractFromCachedCatalog(
-            String input,
-            OrderSession session,
-            Optional<MenuCacheResponse> catalog
-    ) {
-        Optional<MenuCacheResponse.MenuInfo> menu = findMenu(input, catalog);
-        Integer quantity = extractQuantity(input);
-        String option = findOptions(input, catalog, session);
-
-        if (containsAny(input, CANCEL_KW)) {
-            return new SlotExtractionResult("CANCEL", menu.map(MenuCacheResponse.MenuInfo::name).orElse(null), null, option);
-        }
-        if (containsAny(input, CONFIRM_KW) && menu.isEmpty() && quantity == null && option == null) {
-            return new SlotExtractionResult("CONFIRM", null, null, null);
-        }
-        if (menu.isPresent() || quantity != null || option != null || containsAny(input, ORDER_KW)) {
-            return new SlotExtractionResult("ORDER", menu.map(MenuCacheResponse.MenuInfo::name).orElse(null), quantity, option);
-        }
-        return SlotExtractionResult.fallback();
     }
 
     private Optional<MenuCacheResponse> resolveCatalog(OrderSession session) {
@@ -113,20 +83,6 @@ public class LlmSlotFillerService {
         return storeMenuCacheService.getLatestCachedMenus();
     }
 
-    private Optional<MenuCacheResponse.MenuInfo> findMenu(String input, Optional<MenuCacheResponse> catalog) {
-        String normalizedInput = normalize(input);
-        return catalog.stream()
-                .flatMap(response -> response.menus().stream())
-                .filter(menu -> menu.name() != null && !menu.name().isBlank())
-                .map(menu -> Map.entry(menu, normalizedInput.indexOf(normalize(menu.name()))))
-                .filter(entry -> entry.getValue() >= 0)
-                .sorted(Comparator
-                        .comparingInt((Map.Entry<MenuCacheResponse.MenuInfo, Integer> entry) -> entry.getValue())
-                        .thenComparing(entry -> normalize(entry.getKey().name()).length(), Comparator.reverseOrder()))
-                .map(Map.Entry::getKey)
-                .findFirst();
-    }
-
     private List<MenuCacheResponse.MenuInfo> menusForSession(
             Optional<MenuCacheResponse> catalog,
             OrderSession session
@@ -134,6 +90,24 @@ public class LlmSlotFillerService {
         List<MenuCacheResponse.MenuInfo> menus = catalog.stream()
                 .flatMap(response -> response.menus().stream())
                 .toList();
+        if (session != null && session.getOrderDraft() != null && session.getOrderDraft().items() != null) {
+            Set<Long> draftMenuIds = session.getOrderDraft().items().stream()
+                    .map(OrderDraft.Item::menuId)
+                    .filter(id -> id != null)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            Set<String> draftMenuNames = session.getOrderDraft().items().stream()
+                    .map(OrderDraft.Item::menuName)
+                    .map(this::normalize)
+                    .filter(name -> !name.isBlank())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            List<MenuCacheResponse.MenuInfo> draftMenus = menus.stream()
+                    .filter(menu -> draftMenuIds.contains(menu.menuId())
+                            || draftMenuNames.contains(normalize(menu.name())))
+                    .toList();
+            if (!draftMenus.isEmpty()) {
+                return draftMenus;
+            }
+        }
         if (session == null || (session.getMenuId() == null && session.getMenu() == null)) {
             return menus;
         }
@@ -143,31 +117,6 @@ public class LlmSlotFillerService {
                         : normalize(menu.name()).equals(normalize(session.getMenu())))
                 .toList();
         return selectedMenus.isEmpty() ? menus : selectedMenus;
-    }
-
-    private String findOptions(String input, Optional<MenuCacheResponse> catalog, OrderSession session) {
-        String normalizedInput = normalize(input);
-        List<String> options = menusForSession(catalog, session).stream()
-                .flatMap(menu -> emptyIfNull(menu.optionGroups()).stream())
-                .flatMap(group -> emptyIfNull(group.optionItems()).stream())
-                .filter(item -> matchesNameOrAlias(normalizedInput, item.name(), item.aliases()))
-                .map(MenuCacheResponse.OptionItemInfo::name)
-                .distinct()
-                .toList();
-        return options.isEmpty() ? null : String.join(", ", options);
-    }
-
-    private Integer extractQuantity(String input) {
-        Matcher matcher = QTY_DIGIT.matcher(input);
-        if (matcher.find()) {
-            return Integer.parseInt(matcher.group(1));
-        }
-        for (Map.Entry<String, Integer> entry : KO_QTY.entrySet()) {
-            if (input.contains(entry.getKey())) {
-                return entry.getValue();
-            }
-        }
-        return null;
     }
 
     private SlotExtractionResult callGemini(
@@ -210,6 +159,10 @@ public class LlmSlotFillerService {
             String menu = parsed.path("menu").isNull() ? null : parsed.path("menu").asText(null);
             Integer quantity = parsed.path("quantity").isNull() ? null : parsed.path("quantity").asInt();
             String option = parsed.path("option").isNull() ? null : parsed.path("option").asText(null);
+            JsonNode draftNode = parsed.path("orderDraft");
+            if (session != null && !draftNode.isMissingNode() && !draftNode.isNull()) {
+                session.setOrderDraft(MAPPER.treeToValue(draftNode, OrderDraft.class));
+            }
 
             return new SlotExtractionResult(intent, menu, quantity, option);
         } catch (Exception e) {
@@ -224,6 +177,10 @@ public class LlmSlotFillerService {
                 restaurantId: %s
                 selectedMenu: %s
                 quantity: %s
+                previousUtterance: %s
+
+                [현재 주문 slot JSON]
+                %s
 
                 [현재 식당 캐시 카탈로그]
                 %s
@@ -234,9 +191,118 @@ public class LlmSlotFillerService {
                 session == null ? null : session.getRestaurantId(),
                 session == null ? null : session.getMenu(),
                 session == null ? null : session.getQuantity(),
+                session == null ? null : session.getPreviousUtterance(),
+                formatDraft(session, catalog),
                 catalog.map(value -> formatCatalog(value, session)).orElse("캐시된 메뉴 데이터 없음"),
                 userInput
         );
+    }
+
+    private String formatDraft(OrderSession session, Optional<MenuCacheResponse> catalog) {
+        if (session == null || session.getOrderDraft() == null) {
+            return "null";
+        }
+        try {
+            Map<String, Object> draft = new LinkedHashMap<>();
+            draft.put("items", emptyIfNull(session.getOrderDraft().items()).stream()
+                    .map(item -> formatDraftItem(item, catalog))
+                    .toList());
+            return MAPPER.writeValueAsString(draft);
+        } catch (Exception e) {
+            return "null";
+        }
+    }
+
+    private Map<String, Object> formatDraftItem(
+            OrderDraft.Item item,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        Map<String, Object> itemJson = new LinkedHashMap<>();
+        Optional<MenuCacheResponse.MenuInfo> menu = findMenu(item, catalog);
+        itemJson.put("menu", menu.map(MenuCacheResponse.MenuInfo::name).orElse(item.menuName()));
+        itemJson.put("menuPrice", menu.map(MenuCacheResponse.MenuInfo::price).orElse(null));
+        itemJson.put("quantity", item.quantity());
+        if (menu.isEmpty()) {
+            itemJson.put("optionSlots", List.of());
+            return itemJson;
+        }
+
+        Set<Long> selectedOptionIds = selectedOptionIdsFromDraft(item, menu.get());
+        itemJson.put("optionSlots", emptyIfNull(menu.get().optionGroups()).stream()
+                .map(group -> formatOptionSlot(group, selectedOptionIds))
+                .toList());
+        return itemJson;
+    }
+
+    private Map<String, Object> formatOptionSlot(
+            MenuCacheResponse.OptionGroupInfo group,
+            Set<Long> selectedOptionIds
+    ) {
+        Map<String, Object> groupJson = new LinkedHashMap<>();
+        groupJson.put("name", group.name());
+        groupJson.put("isRequired", Boolean.TRUE.equals(group.isRequired()));
+        groupJson.put("candidates", emptyIfNull(group.optionItems()).stream()
+                .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
+                .map(item -> {
+                    Map<String, Object> candidateJson = new LinkedHashMap<>();
+                    candidateJson.put("name", item.name());
+                    candidateJson.put("extraPrice", item.extraPrice());
+                    candidateJson.put("defaultQuantity", item.defaultQuantity() == null ? 0 : item.defaultQuantity());
+                    candidateJson.put("defaultSelected", isDefaultSelected(item));
+                    candidateJson.put("selected", selectedOptionIds.contains(item.optionItemId()));
+                    candidateJson.put("aliases", emptyIfNull(item.aliases()));
+                    return candidateJson;
+                })
+                .toList());
+        return groupJson;
+    }
+
+    private Optional<MenuCacheResponse.MenuInfo> findMenu(
+            OrderDraft.Item item,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        return catalog.stream()
+                .flatMap(response -> response.menus().stream())
+                .filter(menu -> (item.menuId() != null && item.menuId().equals(menu.menuId()))
+                        || normalize(menu.name()).equals(normalize(item.menuName())))
+                .findFirst();
+    }
+
+    private Set<Long> selectedOptionIdsFromDraft(
+            OrderDraft.Item item,
+            MenuCacheResponse.MenuInfo menu
+    ) {
+        Set<Long> selected = new LinkedHashSet<>();
+        java.util.stream.Stream.concat(
+                        emptyIfNull(item.requiredOptions()).stream(),
+                        emptyIfNull(item.optionalOptions()).stream()
+                )
+                .forEach(option -> resolveSelectedOptionId(menu, option).ifPresent(selected::add));
+        return selected;
+    }
+
+    private Optional<Long> resolveSelectedOptionId(
+            MenuCacheResponse.MenuInfo menu,
+            OrderDraft.OptionValue option
+    ) {
+        if (option.selectedOptionItemId() != null) {
+            return Optional.of(option.selectedOptionItemId());
+        }
+        if (option.selectedOptionItemName() == null || option.selectedOptionItemName().isBlank()) {
+            return Optional.empty();
+        }
+        String normalizedOptionName = normalize(option.selectedOptionItemName());
+        return emptyIfNull(menu.optionGroups()).stream()
+                .filter(group -> option.optionGroupId() != null && option.optionGroupId().equals(group.optionGroupId()))
+                .flatMap(group -> emptyIfNull(group.optionItems()).stream())
+                .filter(candidate -> normalize(candidate.name()).equals(normalizedOptionName))
+                .map(MenuCacheResponse.OptionItemInfo::optionItemId)
+                .findFirst();
+    }
+
+    private boolean isDefaultSelected(MenuCacheResponse.OptionItemInfo item) {
+        return Boolean.TRUE.equals(item.isDefault())
+                || (item.defaultQuantity() != null && item.defaultQuantity() > 0);
     }
 
     private String formatCatalog(MenuCacheResponse catalog, OrderSession session) {
@@ -259,24 +325,11 @@ public class LlmSlotFillerService {
         return groups.isBlank() ? "  - 옵션 없음" : groups;
     }
 
-    private boolean matchesNameOrAlias(String normalizedInput, String name, Collection<String> aliases) {
-        if (normalizedInput.contains(normalize(name))) {
-            return true;
-        }
-        return emptyIfNull(aliases).stream()
-                .map(this::normalize)
-                .anyMatch(normalizedInput::contains);
-    }
-
     private String formatAliases(Collection<String> aliases) {
         List<String> values = emptyIfNull(aliases).stream()
                 .filter(alias -> alias != null && !alias.isBlank())
                 .toList();
         return values.isEmpty() ? "" : " (alias: " + String.join(", ", values) + ")";
-    }
-
-    private boolean containsAny(String text, List<String> keywords) {
-        return keywords.stream().anyMatch(text::contains);
     }
 
     private String normalize(String value) {
