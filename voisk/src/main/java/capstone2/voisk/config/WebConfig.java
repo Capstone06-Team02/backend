@@ -10,9 +10,9 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-				.allowedOrigins(
+				.allowedOriginPatterns(
 					"https://voisk-frontend.vercel.app",
-					"https://voisk-frontend-k6y124t8z-sungjae0309s-projects.vercel.app",
+					"https://voisk-frontend-*-sungjae0309s-projects.vercel.app",
 					"https://voisk.cloud",
 					"https://www.voisk.cloud",
 					"https://api.voisk.cloud",
