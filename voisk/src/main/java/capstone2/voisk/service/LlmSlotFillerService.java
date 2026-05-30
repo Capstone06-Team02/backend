@@ -76,42 +76,6 @@ public class LlmSlotFillerService {
         return storeMenuCacheService.getLatestCachedMenus();
     }
 
-    private List<MenuCacheResponse.MenuInfo> menusForSession(
-            Optional<MenuCacheResponse> catalog,
-            OrderSession session
-    ) {
-        List<MenuCacheResponse.MenuInfo> menus = catalog.stream()
-                .flatMap(response -> response.menus().stream())
-                .toList();
-        if (session != null && session.getOrderDraft() != null && session.getOrderDraft().items() != null) {
-            Set<Long> draftMenuIds = session.getOrderDraft().items().stream()
-                    .map(OrderDraft.Item::menuId)
-                    .filter(id -> id != null)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            Set<String> draftMenuNames = session.getOrderDraft().items().stream()
-                    .map(OrderDraft.Item::menuName)
-                    .map(this::normalize)
-                    .filter(name -> !name.isBlank())
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            List<MenuCacheResponse.MenuInfo> draftMenus = menus.stream()
-                    .filter(menu -> draftMenuIds.contains(menu.menuId())
-                            || draftMenuNames.contains(normalize(menu.name())))
-                    .toList();
-            if (!draftMenus.isEmpty()) {
-                return draftMenus;
-            }
-        }
-        if (session == null || (session.getMenuId() == null && session.getMenu() == null)) {
-            return menus;
-        }
-        List<MenuCacheResponse.MenuInfo> selectedMenus = menus.stream()
-                .filter(menu -> session.getMenuId() != null
-                        ? session.getMenuId().equals(menu.menuId())
-                        : normalize(menu.name()).equals(normalize(session.getMenu())))
-                .toList();
-        return selectedMenus.isEmpty() ? menus : selectedMenus;
-    }
-
     private SlotExtractionResult callGemini(
             String userInput,
             OrderSession session,
@@ -152,11 +116,6 @@ public class LlmSlotFillerService {
             String menu = parsed.path("menu").isNull() ? null : parsed.path("menu").asText(null);
             Integer quantity = parsed.path("quantity").isNull() ? null : parsed.path("quantity").asInt();
             String option = parsed.path("option").isNull() ? null : parsed.path("option").asText(null);
-            JsonNode draftNode = parsed.path("orderDraft");
-            if (session != null && !draftNode.isMissingNode() && !draftNode.isNull()) {
-                session.setOrderDraft(MAPPER.treeToValue(draftNode, OrderDraft.class));
-            }
-
             return new SlotExtractionResult(intent, menu, quantity, option);
         } catch (Exception e) {
             log.error("[Gemini] 슬롯 추출 실패 - input: \"{}\", error: {}", userInput, e.getMessage());
@@ -323,13 +282,6 @@ public class LlmSlotFillerService {
         return List.of("추가", "그리고", "또", "랑", "하고", "도").stream()
                 .map(this::normalize)
                 .anyMatch(normalizedInput::contains);
-    }
-
-    private String formatAliases(Collection<String> aliases) {
-        List<String> values = emptyIfNull(aliases).stream()
-                .filter(alias -> alias != null && !alias.isBlank())
-                .toList();
-        return values.isEmpty() ? "" : " (alias: " + String.join(", ", values) + ")";
     }
 
     private String normalize(String value) {

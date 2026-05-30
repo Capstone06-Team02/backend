@@ -1,8 +1,10 @@
 package capstone2.voisk.service;
 
+import capstone2.voisk.converter.MenuOptionalOptionsResponseConverter;
 import capstone2.voisk.converter.OptionSlotConverter;
 import capstone2.voisk.converter.OrderResponseConverter;
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.MenuOptionalOptionsResponse;
 import capstone2.voisk.dto.OptionSlot;
 import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
@@ -15,6 +17,7 @@ import capstone2.voisk.entity.OrderMenuOption;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
+import capstone2.voisk.repository.MenuOptionGroupRepository;
 import capstone2.voisk.repository.MenuOptionItemRepository;
 import capstone2.voisk.repository.MenuRepository;
 import capstone2.voisk.repository.OrderMenuOptionRepository;
@@ -65,13 +68,26 @@ public class OrderService {
     private final LlmSlotFillerService llmSlotFillerService;
     private final StoreRepository storeRepository;
     private final MenuRepository menuRepository;
+    private final MenuOptionGroupRepository menuOptionGroupRepository;
     private final MenuOptionItemRepository menuOptionItemRepository;
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
+    private final MenuOptionalOptionsResponseConverter menuOptionalOptionsResponseConverter;
     private final OptionSlotConverter optionSlotConverter;
     private final OrderResponseConverter orderResponseConverter;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
+
+    @Transactional(readOnly = true)
+    public MenuOptionalOptionsResponse getOptionalOptions(Long menuId) {
+        Menu menu = menuRepository.findById(menuId)
+                .orElseThrow(() -> new IllegalArgumentException("Menu not found. menuId=" + menuId));
+
+        return menuOptionalOptionsResponseConverter.toResponse(
+                menu,
+                menuOptionGroupRepository.findTopLevelOptionalGroupsByMenuId(menuId)
+        );
+    }
 
     @Transactional
     public OrderResponse process(OrderRequest request) {
@@ -343,40 +359,6 @@ public class OrderService {
                 optionalOptionListPrompt(session.getMenu(), optionalGroups),
                 quickRepliesForOptionalGroups(optionalGroups),
                 List.of());
-    }
-
-    private void applyOptionSelection(
-            String text,
-            OrderSession session,
-            MenuCacheResponse.MenuInfo menu,
-            Collection<MenuCacheResponse.OptionGroupInfo> targetGroups
-    ) {
-        Set<Long> selected = selectedOptionIds(session);
-        boolean removeMode = containsAny(text, OPTION_REMOVE_KW);
-        String normalizedText = normalize(text);
-
-        for (MenuCacheResponse.OptionGroupInfo group : targetGroups) {
-            for (MenuCacheResponse.OptionItemInfo item : emptyIfNull(group.optionItems())) {
-                if (Boolean.FALSE.equals(item.isAvailable())) {
-                    continue;
-                }
-                if (!optionItemMatchesText(normalizedText, item)) {
-                    continue;
-                }
-
-                if (removeMode) {
-                    selected.remove(item.optionItemId());
-                } else {
-                    if (maxSelect(group) == 1) {
-                        removeGroupSelections(selected, group);
-                    }
-                    selected.add(item.optionItemId());
-                }
-            }
-        }
-
-        pruneInactiveSelections(selected, menu);
-        session.setSelectedOptionItemIds(new LinkedHashSet<>(selected));
     }
 
     private Optional<OptionSelection> findOptionSelection(
@@ -1014,12 +996,6 @@ public class OrderService {
     private List<OptionSlot> requiredOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
         return requiredOptionGroups(menu, selectedOptionIds).stream()
                 .limit(1)
-                .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
-                .toList();
-    }
-
-    private List<OptionSlot> optionalOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
-        return optionalOptionGroups(menu, selectedOptionIds).stream()
                 .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
                 .toList();
     }

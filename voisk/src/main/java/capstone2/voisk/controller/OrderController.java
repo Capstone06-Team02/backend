@@ -1,6 +1,7 @@
 package capstone2.voisk.controller;
 
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.MenuOptionalOptionsResponse;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.service.OrderService;
@@ -10,6 +11,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -36,6 +38,15 @@ public class OrderController {
         OrderResponse response = orderService.process(request);
         log.info("speak API slot={}, slotFilling={}", response.getSlots(), !response.isSlotsComplete());
         return ResponseEntity.ok(response);
+    }
+
+    @Operation(
+        summary = "Get optional options by menu id",
+        description = "Returns optional option groups and option items for a menu."
+    )
+    @GetMapping("/menus/{menuId}/optional-options")
+    public ResponseEntity<MenuOptionalOptionsResponse> getOptionalOptions(@PathVariable Long menuId) {
+        return ResponseEntity.ok(orderService.getOptionalOptions(menuId));
     }
 
     @Operation(
