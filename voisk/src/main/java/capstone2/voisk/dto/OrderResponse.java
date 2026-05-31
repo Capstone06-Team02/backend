@@ -1,5 +1,6 @@
 package capstone2.voisk.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
 import lombok.Data;
@@ -17,19 +18,19 @@ public class OrderResponse {
     @Schema(description = "분류된 사용자 의도", allowableValues = {"ORDER", "CONFIRM", "CANCEL", "UNKNOWN"})
     private String intent;
 
-    @Schema(description = "봇 응답 메시지", example = "슈크림 라떼 2개 맞으시죠? 확인해 주세요.")
+    @Schema(description = "봇 응답 메시지")
     private String response;
 
-    @Schema(description = "현재까지 수집된 슬롯 정보")
+    @Schema(description = "현재 주문 슬롯 상태")
     private SlotInfo slots;
 
     @Schema(description = "현재 주문 가격 정보")
     private PriceInfo price;
 
-    @Schema(description = "메뉴·수량이 모두 채워졌는지 여부")
+    @Schema(description = "인식된 모든 메뉴의 필수 옵션이 채워졌는지 여부")
     private boolean slotsComplete;
 
-    @Schema(description = "클라이언트에 표시할 빠른 답변 선택지")
+    @Schema(description = "클라이언트에 표시할 빠른 선택지")
     private List<String> quickReplies;
 
     @Data
@@ -37,13 +38,53 @@ public class OrderResponse {
     @Schema(description = "주문 슬롯 정보")
     public static class SlotInfo {
 
-        @Schema(description = "선택된 메뉴", nullable = true)
+        @Schema(description = "메뉴별 전체 슬롯 상태")
+        private List<OrderItemSlot> items;
+
+        @JsonIgnore
+        public String getMenu() {
+            return firstItem() == null ? null : firstItem().getMenu();
+        }
+
+        @JsonIgnore
+        public Integer getQuantity() {
+            return firstItem() == null ? null : firstItem().getQuantity();
+        }
+
+        @JsonIgnore
+        public List<OptionSlot> getOptionSlots() {
+            return firstItem() == null ? List.of() : firstItem().getOptionSlots();
+        }
+
+        private OrderItemSlot firstItem() {
+            return items == null || items.isEmpty() ? null : items.get(0);
+        }
+    }
+
+    @Data
+    @Builder
+    @Schema(description = "메뉴별 전체 슬롯 상태")
+    public static class OrderItemSlot {
+
+        @Schema(description = "메뉴명")
         private String menu;
 
-        @Schema(description = "주문 수량", nullable = true, example = "2")
+        @Schema(description = "주문 수량")
         private Integer quantity;
 
-        @Schema(description = "메뉴 확정 후 채워야 하는 옵션 슬롯 목록")
+        @Schema(description = "메뉴 기본 가격")
+        private Integer menuPrice;
+
+        @Schema(description = "선택 옵션 추가 금액")
+        private Integer optionExtraPrice;
+
+        @Schema(description = "메뉴 1개당 최종 가격")
+        private Integer unitPrice;
+
+        @Schema(description = "수량까지 반영한 메뉴별 총 금액")
+        private Integer totalPrice;
+
+        @Schema(description = "메뉴의 전체 옵션 상태")
         private List<OptionSlot> optionSlots;
     }
 
@@ -52,13 +93,13 @@ public class OrderResponse {
     @Schema(description = "주문 가격 정보")
     public static class PriceInfo {
 
-        @Schema(description = "메뉴 기본 가격", nullable = true)
+        @Schema(description = "메뉴 기본 금액 합계", nullable = true)
         private Integer menuPrice;
 
-        @Schema(description = "선택된 옵션 추가 금액 합계", nullable = true)
+        @Schema(description = "선택 옵션 추가 금액 합계", nullable = true)
         private Integer optionExtraPrice;
 
-        @Schema(description = "메뉴 1개당 최종 가격", nullable = true)
+        @Schema(description = "메뉴 1개당 최종 가격. 여러 메뉴가 있으면 null", nullable = true)
         private Integer unitPrice;
 
         @Schema(description = "수량까지 반영한 총 주문 금액", nullable = true)

@@ -1,7 +1,12 @@
 package capstone2.voisk.service;
 
+import capstone2.voisk.converter.MenuOptionalOptionsResponseConverter;
+import capstone2.voisk.converter.OptionSlotConverter;
+import capstone2.voisk.converter.OrderResponseConverter;
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.MenuOptionalOptionsResponse;
 import capstone2.voisk.dto.OptionSlot;
+import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
@@ -12,6 +17,7 @@ import capstone2.voisk.entity.OrderMenuOption;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
+import capstone2.voisk.repository.MenuOptionGroupRepository;
 import capstone2.voisk.repository.MenuOptionItemRepository;
 import capstone2.voisk.repository.MenuRepository;
 import capstone2.voisk.repository.OrderMenuOptionRepository;
@@ -44,11 +50,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class OrderService {
 
-    private static final List<String> CONFIRM_KW = List.of("네", "예", "맞아", "맞아요", "확인", "응", "좋아");
-    private static final List<String> CANCEL_KW = List.of("아니", "취소", "다시", "말고");
     private static final List<String> OPTION_REMOVE_KW = List.of("빼", "없이", "제외", "삭제", "안 넣", "넣지 마");
+    private static final List<String> NO_OPTION_KW = List.of("없", "없어", "없어요", "없습니다", "안 해", "안할", "안 할", "괜찮", "확인");
     private static final Pattern QTY_DIGIT = Pattern.compile("(\\d+)\\s*(?:개|잔|인분|명)");
-    private static final List<String> DEFAULT_OPTION_KW = List.of("그대로", "기본", "디폴트", "원래대로");
     private static final Map<String, Integer> KO_QTY = Map.ofEntries(
             Map.entry("하나", 1),
             Map.entry("한", 1),
@@ -64,11 +68,33 @@ public class OrderService {
     private final LlmSlotFillerService llmSlotFillerService;
     private final StoreRepository storeRepository;
     private final MenuRepository menuRepository;
+    private final MenuOptionGroupRepository menuOptionGroupRepository;
     private final MenuOptionItemRepository menuOptionItemRepository;
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
+    private final MenuOptionalOptionsResponseConverter menuOptionalOptionsResponseConverter;
+    private final OptionSlotConverter optionSlotConverter;
+    private final OrderResponseConverter orderResponseConverter;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
+
+    Optional<OrderSession> findActiveSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(sessions.get(sessionId));
+    }
+
+    @Transactional(readOnly = true)
+    public MenuOptionalOptionsResponse getOptionalOptions(Long menuId) {
+        Menu menu = menuRepository.findById(menuId)
+                .orElseThrow(() -> new IllegalArgumentException("Menu not found. menuId=" + menuId));
+
+        return menuOptionalOptionsResponseConverter.toResponse(
+                menu,
+                menuOptionGroupRepository.findTopLevelOptionalGroupsByMenuId(menuId)
+        );
+    }
 
     @Transactional
     public OrderResponse process(OrderRequest request) {
@@ -81,9 +107,12 @@ public class OrderService {
 
         String text = request.getInput() == null ? "" : request.getInput().trim();
         Optional<MenuCacheResponse> catalog = resolveCatalog(session);
+        seedOrderDraftFromText(text, session, catalog);
         SlotExtractionResult extracted = extractSlots(text, session, catalog);
-        String intent = "UNKNOWN".equals(extracted.intent()) ? classifyIntent(text, catalog) : extracted.intent();
+        String intent = extracted.intent();
         String currentOptionText = optionAwareText(text, extracted);
+        applyOptionMentionsToDraft(currentOptionText, session, catalog);
+        session.setPreviousUtterance(text);
         String optionText = mergeOptionText(session.getPendingOptionText(), currentOptionText);
 
         if (session.getStatus() == OrderStatus.DONE) {
@@ -92,14 +121,35 @@ public class OrderService {
             session.setRestaurantId(restaurantId);
         }
 
-        if ("CANCEL".equals(intent)) {
+        if (hasPendingOptionConfirmation(session)) {
+            return handleOptionSelectionConfirmation(sid, intent, session, catalog);
+        }
+
+        if ("CANCEL".equals(intent)
+                && !(session.getStatus() == OrderStatus.OPTION_FILLING && isNoAdditionalOptionText(text))) {
             return handleCancel(sid, session, catalog);
+        }
+
+        Optional<OrderResponse> draftResponse = handleDraftFlow(sid, intent, session, catalog);
+        if (draftResponse.isPresent()) {
+            return draftResponse.get();
         }
 
         if (session.getStatus() == OrderStatus.OPTION_FILLING) {
             fillMenuAndQuantitySlots(text, session, catalog, extracted);
             session.setPendingOptionText(null);
             return handleOptionUtterance(sid, intent, optionText, session, catalog);
+        }
+
+        if (session.getStatus() == OrderStatus.MENU_CONFIRMING) {
+            if ("CONFIRM".equals(intent)) {
+                session.setStatus(OrderStatus.CONFIRMING);
+                return confirmMenuAndStartOptionFilling(sid, intent, session, catalog);
+            }
+            return build(sid, intent, session,
+                    multiMenuConfirmationPrompt(session),
+                    List.of("네", "아니요"),
+                    List.of());
         }
 
         if (session.getStatus() == OrderStatus.CONFIRMING && "CONFIRM".equals(intent)) {
@@ -114,7 +164,12 @@ public class OrderService {
                     List.of());
         }
 
-        seedPendingMenusFromText(currentOptionText, session, catalog);
+        if (seedPendingMenusFromText(currentOptionText, session, catalog)) {
+            return build(sid, intent, session,
+                    multiMenuConfirmationPrompt(session),
+                    List.of("네", "아니요"),
+                    List.of());
+        }
         fillMenuAndQuantitySlots(text, session, catalog, extracted);
         optionText = mergeOptionText(session.getPendingOptionText(), currentOptionText);
 
@@ -174,12 +229,14 @@ public class OrderService {
         if (selectedMenu.isPresent()) {
             MenuCacheResponse.MenuInfo menu = selectedMenu.get();
             Set<Long> selected = defaultOptionIds(menu);
+            selected = mergeSelectedOptionIds(menu, selected, selectedOptionIds(session));
+            Set<Long> currentSelectedOptionIds = selected;
             session.setSelectedOptionItemIds(new LinkedHashSet<>(selected));
             List<OptionSlot> requiredSlots = requiredOptionSlots(menu, selected);
             requiredPhase = !requiredSlots.isEmpty();
             optionalGroups = optionalOptionGroups(menu, selected);
             activeSlots = requiredPhase ? requiredSlots : optionalGroups.stream()
-                    .map(group -> toOptionSlot(group, selected))
+                    .map(group -> optionSlotConverter.toOptionSlot(group, currentSelectedOptionIds))
                     .toList();
         }
 
@@ -202,10 +259,8 @@ public class OrderService {
 
         return build(sid, intent, session,
                 requiredPhase
-                        ? String.format("%s %d개로 확인했습니다. %s",
-                        session.getMenu(), session.getQuantity(), requiredOptionPrompt(activeSlots))
-                        : String.format("%s %d개로 확인했습니다. 추가 옵션을 선택하거나 확인해 주세요.",
-                        session.getMenu(), session.getQuantity()),
+                        ? requiredOptionPrompt(session.getMenu(), activeSlots)
+                        : optionalOptionListPrompt(session.getMenu(), optionalGroups),
                 requiredPhase ? quickRepliesForOptions(activeSlots, true) : quickRepliesForOptionalGroups(optionalGroups),
                 requiredPhase ? activeSlots : List.of());
     }
@@ -242,13 +297,16 @@ public class OrderService {
             return handleOptionalOptionUtterance(sid, intent, text, session, menu, selectableGroups);
         }
 
-        applyOptionSelection(text, session, menu, selectableGroups);
+        Optional<OptionSelection> optionSelection = findOptionSelection(text, menu, selectableGroups);
+        if (optionSelection.isPresent()) {
+            return askOptionSelectionConfirmation(sid, intent, session, menu, optionSelection.get());
+        }
 
         Set<Long> selected = selectedOptionIds(session);
         List<OptionSlot> requiredSlots = requiredOptionSlots(menu, selected);
         if (!requiredSlots.isEmpty()) {
             return build(sid, intent, session,
-                    requiredOptionPrompt(requiredSlots),
+                    requiredOptionPrompt(session.getMenu(), requiredSlots),
                     quickRepliesForOptions(requiredSlots, true),
                     requiredSlots);
         }
@@ -259,7 +317,7 @@ public class OrderService {
         }
 
         return build(sid, intent, session,
-                optionalOptionListPrompt(optionalGroups),
+                optionalOptionListPrompt(session.getMenu(), optionalGroups),
                 quickRepliesForOptionalGroups(optionalGroups),
                 List.of());
     }
@@ -275,90 +333,194 @@ public class OrderService {
         if (optionalGroups.isEmpty()) {
             return completeCurrentItemAndContinue(sid, intent, session, menu);
         }
+        if ("CONFIRM".equals(intent) || isNoAdditionalOptionText(text)) {
+            return completeCurrentItemAndContinue(sid, intent, session, menu);
+        }
 
         Optional<MenuCacheResponse.OptionGroupInfo> selectedGroup = findPendingOptionalGroup(session, optionalGroups)
                 .or(() -> findMentionedOptionGroup(text, optionalGroups));
         if (selectedGroup.isPresent()) {
             MenuCacheResponse.OptionGroupInfo group = selectedGroup.get();
             if (session.getPendingOptionalGroupId() != null) {
-                applyOptionSelection(text, session, menu, List.of(group));
-                session.setPendingOptionalGroupId(null);
-
-                Set<Long> selected = selectedOptionIds(session);
-                List<OptionSlot> requiredSlots = requiredOptionSlots(menu, selected);
-                if (!requiredSlots.isEmpty()) {
-                    return build(sid, intent, session,
-                            requiredOptionPrompt(requiredSlots),
-                            quickRepliesForOptions(requiredSlots, true),
-                            requiredSlots);
+                Optional<OptionSelection> optionSelection = findOptionSelection(text, menu, List.of(group));
+                if (optionSelection.isPresent()) {
+                    return askOptionSelectionConfirmation(sid, intent, session, menu, optionSelection.get());
                 }
 
-                List<MenuCacheResponse.OptionGroupInfo> nextOptionalGroups = optionalOptionGroups(menu, selected);
+                OptionSlot optionSlot = optionSlotConverter.toOptionSlot(group, selectedOptionIds(session));
                 return build(sid, intent, session,
-                        optionalOptionListPrompt(nextOptionalGroups),
-                        quickRepliesForOptionalGroups(nextOptionalGroups),
-                        List.of());
+                        optionChangePrompt(session.getMenu(), group.name()),
+                        quickRepliesForOptions(List.of(optionSlot), false),
+                        List.of(optionSlot));
             }
 
             session.setPendingOptionalGroupId(group.optionGroupId());
-            OptionSlot optionSlot = toOptionSlot(group, selectedOptionIds(session));
+            OptionSlot optionSlot = optionSlotConverter.toOptionSlot(group, selectedOptionIds(session));
             return build(sid, intent, session,
-                    group.name() + " 옵션에서 변경할 값을 선택해 주세요.",
+                    optionChangePrompt(session.getMenu(), group.name()),
                     quickRepliesForOptions(List.of(optionSlot), false),
                     List.of(optionSlot));
         }
 
         return build(sid, intent, session,
-                optionalOptionListPrompt(optionalGroups),
+                optionalOptionListPrompt(session.getMenu(), optionalGroups),
                 quickRepliesForOptionalGroups(optionalGroups),
                 List.of());
     }
 
-    private void applyOptionSelection(
+    private Optional<OptionSelection> findOptionSelection(
             String text,
-            OrderSession session,
             MenuCacheResponse.MenuInfo menu,
             Collection<MenuCacheResponse.OptionGroupInfo> targetGroups
     ) {
-        Set<Long> selected = selectedOptionIds(session);
         boolean removeMode = containsAny(text, OPTION_REMOVE_KW);
+        if (removeMode) {
+            return Optional.empty();
+        }
         String normalizedText = normalize(text);
-
         for (MenuCacheResponse.OptionGroupInfo group : targetGroups) {
             for (MenuCacheResponse.OptionItemInfo item : emptyIfNull(group.optionItems())) {
                 if (Boolean.FALSE.equals(item.isAvailable())) {
                     continue;
                 }
-                if (!optionItemMatchesText(normalizedText, group, item)) {
-                    continue;
-                }
-
-                if (removeMode) {
-                    selected.remove(item.optionItemId());
-                } else {
-                    if (maxSelect(group) == 1) {
-                        removeGroupSelections(selected, group);
-                    }
-                    selected.add(item.optionItemId());
+                if (optionItemMatchesText(normalizedText, item)) {
+                    return Optional.of(new OptionSelection(group, item));
                 }
             }
         }
+        return Optional.empty();
+    }
 
+    private OrderResponse askOptionSelectionConfirmation(
+            String sid,
+            String intent,
+            OrderSession session,
+            MenuCacheResponse.MenuInfo menu,
+            OptionSelection selection
+    ) {
+        session.setPendingOptionConfirmGroupId(selection.group().optionGroupId());
+        session.setPendingOptionConfirmItemId(selection.item().optionItemId());
+        return build(sid, intent, session,
+                optionSelectionConfirmationPrompt(menu.name(), selection.group().name(), selection.item().name()),
+                List.of("네", "아니요"),
+                List.of());
+    }
+
+    private OrderResponse handleOptionSelectionConfirmation(
+            String sid,
+            String intent,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        Optional<MenuCacheResponse.MenuInfo> selectedMenu = findSelectedMenu(catalog, session);
+        if (selectedMenu.isEmpty()) {
+            clearPendingOptionConfirmation(session);
+            return build(sid, intent, session,
+                    "메뉴 정보를 찾지 못했습니다. 옵션을 다시 말씀해 주세요.",
+                    List.of(),
+                    List.of());
+        }
+
+        MenuCacheResponse.MenuInfo menu = selectedMenu.get();
+        Optional<MenuCacheResponse.OptionGroupInfo> group = findOptionGroupById(
+                menu,
+                session.getPendingOptionConfirmGroupId()
+        );
+        Optional<MenuCacheResponse.OptionItemInfo> item = group.stream()
+                .flatMap(value -> emptyIfNull(value.optionItems()).stream())
+                .filter(value -> value.optionItemId().equals(session.getPendingOptionConfirmItemId()))
+                .findFirst();
+        if (group.isEmpty() || item.isEmpty()) {
+            clearPendingOptionConfirmation(session);
+            return build(sid, intent, session,
+                    "확인할 옵션 정보를 찾지 못했습니다. 옵션을 다시 선택해 주세요.",
+                    List.of(),
+                    List.of());
+        }
+
+        if ("CONFIRM".equals(intent)) {
+            applyConfirmedOptionSelection(session, menu, group.get(), item.get());
+            clearPendingOptionConfirmation(session);
+            session.setPendingOptionalGroupId(null);
+            return continueAfterConfirmedOptionSelection(sid, intent, session, menu);
+        }
+
+        clearPendingOptionConfirmation(session);
+        OptionSlot optionSlot = optionSlotConverter.toOptionSlot(group.get(), selectedOptionIds(session));
+        return build(sid, intent, session,
+                optionRejectedPrompt(menu.name(), group.get().name()),
+                quickRepliesForOptions(List.of(optionSlot), Boolean.TRUE.equals(group.get().isRequired())),
+                List.of(optionSlot));
+    }
+
+    private OrderResponse continueAfterConfirmedOptionSelection(
+            String sid,
+            String intent,
+            OrderSession session,
+            MenuCacheResponse.MenuInfo menu
+    ) {
+        Set<Long> selected = selectedOptionIds(session);
+        List<OptionSlot> requiredSlots = requiredOptionSlots(menu, selected);
+        if (!requiredSlots.isEmpty()) {
+            return build(sid, intent, session,
+                    requiredOptionPrompt(session.getMenu(), requiredSlots),
+                    quickRepliesForOptions(requiredSlots, true),
+                    requiredSlots);
+        }
+
+        List<MenuCacheResponse.OptionGroupInfo> optionalGroups = optionalOptionGroups(menu, selected);
+        if (optionalGroups.isEmpty()) {
+            return completeCurrentItemAndContinue(sid, intent, session, menu);
+        }
+
+        return build(sid, intent, session,
+                optionalOptionListPrompt(session.getMenu(), optionalGroups),
+                quickRepliesForOptionalGroups(optionalGroups),
+                List.of());
+    }
+
+    private void applyConfirmedOptionSelection(
+            OrderSession session,
+            MenuCacheResponse.MenuInfo menu,
+            MenuCacheResponse.OptionGroupInfo group,
+            MenuCacheResponse.OptionItemInfo item
+    ) {
+        Set<Long> selected = selectedOptionIds(session);
+        if (maxSelect(group) == 1) {
+            removeGroupSelections(selected, group);
+        }
+        selected.add(item.optionItemId());
         pruneInactiveSelections(selected, menu);
         session.setSelectedOptionItemIds(new LinkedHashSet<>(selected));
     }
 
-    private void seedPendingMenusFromText(
+    private boolean hasPendingOptionConfirmation(OrderSession session) {
+        return session.getPendingOptionConfirmGroupId() != null
+                && session.getPendingOptionConfirmItemId() != null;
+    }
+
+    private void clearPendingOptionConfirmation(OrderSession session) {
+        session.setPendingOptionConfirmGroupId(null);
+        session.setPendingOptionConfirmItemId(null);
+    }
+
+    private record OptionSelection(
+            MenuCacheResponse.OptionGroupInfo group,
+            MenuCacheResponse.OptionItemInfo item
+    ) {
+    }
+
+    private boolean seedPendingMenusFromText(
             String text,
             OrderSession session,
             Optional<MenuCacheResponse> catalog
     ) {
         if (session.getMenu() != null || !pendingMenuItems(session).isEmpty()) {
-            return;
+            return false;
         }
         List<MenuCacheResponse.MenuInfo> menus = findMenusInText(text, catalog);
         if (menus.size() < 2) {
-            return;
+            return false;
         }
 
         MenuCacheResponse.MenuInfo firstMenu = menus.get(0);
@@ -370,8 +532,349 @@ public class OrderService {
         menus.stream()
                 .skip(1)
                 .forEach(menu -> pendingMenuItems(session).addLast(
-                        new OrderSession.PendingMenuItem(menu.menuId(), menu.name(), 1, null)
+                        new OrderSession.PendingMenuItem(menu.menuId(), menu.name(), 1, null, null)
                 ));
+        session.setStatus(OrderStatus.MENU_CONFIRMING);
+        return true;
+    }
+
+    private void seedOrderDraftFromText(
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (session.getOrderDraft() != null) {
+            return;
+        }
+        List<MenuCacheResponse.MenuInfo> menus = findMenusInText(text, catalog);
+        if (menus.isEmpty()) {
+            return;
+        }
+        List<OrderDraft.Item> items = menus.stream()
+                .map(menu -> toDraftItem(menu, text))
+                .toList();
+        session.setOrderDraft(new OrderDraft(items));
+    }
+
+    private OrderDraft.Item toDraftItem(MenuCacheResponse.MenuInfo menu, String sourceText) {
+        List<OrderDraft.OptionValue> optionValues = activeOptionGroups(menu, Set.of()).stream()
+                .map(this::toDraftOptionValue)
+                .toList();
+        return new OrderDraft.Item(
+                menu.menuId(),
+                menu.name(),
+                1,
+                optionValues.stream()
+                        .filter(option -> Boolean.TRUE.equals(option.required()))
+                        .toList(),
+                optionValues.stream()
+                        .filter(option -> !Boolean.TRUE.equals(option.required()))
+                        .toList(),
+                sourceText
+        );
+    }
+
+    private OrderDraft.OptionValue toDraftOptionValue(MenuCacheResponse.OptionGroupInfo group) {
+        return toDraftOptionValue(group, Set.of());
+    }
+
+    private OrderDraft.OptionValue toDraftOptionValue(
+            MenuCacheResponse.OptionGroupInfo group,
+            Set<Long> selectedOptionIds
+    ) {
+        Optional<MenuCacheResponse.OptionItemInfo> selectedOption = selectedOption(group, selectedOptionIds);
+        return new OrderDraft.OptionValue(
+                group.optionGroupId(),
+                group.name(),
+                group.isRequired(),
+                selectedOption.map(MenuCacheResponse.OptionItemInfo::optionItemId).orElse(null),
+                selectedOption.map(MenuCacheResponse.OptionItemInfo::name).orElse(null),
+                emptyIfNull(group.optionItems()).stream()
+                        .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
+                        .map(item -> new OrderDraft.OptionCandidate(
+                                item.optionItemId(),
+                                item.name(),
+                                item.aliases()
+                        ))
+                        .toList()
+        );
+    }
+
+    private void applyOptionMentionsToDraft(
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        OrderDraft draft = session.getOrderDraft();
+        if (draft == null || draft.items() == null || draft.items().isEmpty()) {
+            return;
+        }
+
+        List<OrderDraft.Item> items = draft.items().stream()
+                .map(item -> applyOptionMentionsToDraftItem(text, item, catalog))
+                .toList();
+        session.setOrderDraft(new OrderDraft(items));
+    }
+
+    private OrderDraft.Item applyOptionMentionsToDraftItem(
+            String text,
+            OrderDraft.Item item,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        Optional<MenuCacheResponse.MenuInfo> menu = findMenuById(item.menuId(), catalog)
+                .or(() -> findMenuByName(item.menuName(), catalog));
+        if (menu.isEmpty()) {
+            return item;
+        }
+
+        String optionText = mergeOptionText(text, item.sourceText());
+        Set<Long> selectedOptionIds = inferOptionIdsFromText(
+                optionText,
+                menu.get(),
+                selectedOptionIdsFromDraft(item, menu.get())
+        );
+
+        List<OrderDraft.OptionValue> optionValues = activeOptionGroups(menu.get(), selectedOptionIds).stream()
+                .map(group -> toDraftOptionValue(group, selectedOptionIds))
+                .toList();
+
+        return new OrderDraft.Item(
+                menu.get().menuId(),
+                menu.get().name(),
+                item.quantity() == null || item.quantity() < 1 ? 1 : item.quantity(),
+                optionValues.stream()
+                        .filter(option -> Boolean.TRUE.equals(option.required()))
+                        .toList(),
+                optionValues.stream()
+                        .filter(option -> !Boolean.TRUE.equals(option.required()))
+                        .toList(),
+                item.sourceText()
+        );
+    }
+
+    private Set<Long> inferOptionIdsFromText(
+            String text,
+            MenuCacheResponse.MenuInfo menu,
+            Set<Long> initialSelectedOptionIds
+    ) {
+        String normalizedText = normalize(text);
+        Set<Long> selectedOptionIds = new LinkedHashSet<>(initialSelectedOptionIds);
+        if (normalizedText.isBlank()) {
+            return selectedOptionIds;
+        }
+
+        boolean changed;
+        do {
+            changed = false;
+            for (MenuCacheResponse.OptionGroupInfo group : activeOptionGroups(menu, selectedOptionIds)) {
+                for (MenuCacheResponse.OptionItemInfo item : emptyIfNull(group.optionItems())) {
+                    if (Boolean.FALSE.equals(item.isAvailable())
+                            || !optionItemMatchesText(normalizedText, item)) {
+                        continue;
+                    }
+
+                    Set<Long> before = new LinkedHashSet<>(selectedOptionIds);
+                    if (maxSelect(group) == 1) {
+                        removeGroupSelections(selectedOptionIds, group);
+                    }
+                    selectedOptionIds.add(item.optionItemId());
+                    if (!before.equals(selectedOptionIds)) {
+                        changed = true;
+                    }
+                }
+            }
+            pruneInactiveSelections(selectedOptionIds, menu);
+        } while (changed);
+
+        return selectedOptionIds;
+    }
+
+    private Optional<MenuCacheResponse.OptionItemInfo> selectedOption(
+            MenuCacheResponse.OptionGroupInfo group,
+            Set<Long> selectedOptionIds
+    ) {
+        return emptyIfNull(group.optionItems()).stream()
+                .filter(item -> selectedOptionIds.contains(item.optionItemId()))
+                .findFirst();
+    }
+
+    private Optional<OrderResponse> handleDraftFlow(
+            String sid,
+            String intent,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        OrderDraft draft = session.getOrderDraft();
+        if (draft == null || draft.items() == null || draft.items().isEmpty()) {
+            return Optional.empty();
+        }
+
+        Optional<DraftMissingOption> missingOption = findFirstMissingRequiredOption(draft, catalog);
+        if (missingOption.isPresent()) {
+            DraftMissingOption missing = missingOption.get();
+            hydrateSessionFromDraftItem(session, missing.item(), catalog);
+            OptionSlot optionSlot = optionSlotConverter.toOptionSlot(
+                    missing.optionGroup(),
+                    selectedOptionIdsFromDraft(missing.item(), missing.menu())
+            );
+            return Optional.of(build(sid, intent, session,
+                    requiredOptionPrompt(missing.item().menuName(), List.of(optionSlot)),
+                    quickRepliesForOptions(List.of(optionSlot), true),
+                    List.of(optionSlot)));
+        }
+
+        hydrateLegacySessionFromDraft(session, draft, catalog);
+        session.setOrderDraft(null);
+        session.setStatus(OrderStatus.CONFIRMING);
+        return Optional.of(confirmMenuAndStartOptionFilling(sid, intent, session, catalog));
+    }
+
+    private Optional<DraftMissingOption> findFirstMissingRequiredOption(
+            OrderDraft draft,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        for (OrderDraft.Item item : emptyIfNull(draft.items())) {
+            Optional<MenuCacheResponse.MenuInfo> menu = findMenuById(item.menuId(), catalog)
+                    .or(() -> findMenuByName(item.menuName(), catalog));
+            if (menu.isEmpty()) {
+                continue;
+            }
+            for (OrderDraft.OptionValue option : emptyIfNull(item.requiredOptions())) {
+                Optional<MenuCacheResponse.OptionGroupInfo> optionGroup = findOptionGroupById(
+                        menu.get(),
+                        option.optionGroupId()
+                );
+                if (optionGroup.isPresent() && resolveSelectedOptionId(menu.get(), option).isPresent()) {
+                    continue;
+                }
+                if (optionGroup.isPresent()) {
+                    return Optional.of(new DraftMissingOption(item, menu.get(), optionGroup.get()));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void hydrateLegacySessionFromDraft(
+            OrderSession session,
+            OrderDraft draft,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        session.resetCurrentItem();
+        pendingMenuItems(session).clear();
+
+        List<OrderDraft.Item> items = emptyIfNull(draft.items()).stream()
+                .filter(item -> findMenuById(item.menuId(), catalog)
+                        .or(() -> findMenuByName(item.menuName(), catalog))
+                        .isPresent())
+                .toList();
+        if (items.isEmpty()) {
+            return;
+        }
+
+        hydrateSessionFromDraftItem(session, items.get(0), catalog);
+        items.stream()
+                .skip(1)
+                .forEach(item -> pendingMenuItems(session).addLast(
+                        new OrderSession.PendingMenuItem(
+                                item.menuId(),
+                                item.menuName(),
+                                item.quantity() == null || item.quantity() < 1 ? 1 : item.quantity(),
+                                item.sourceText(),
+                                selectedOptionIdsFromDraft(item, findMenuById(item.menuId(), catalog)
+                                        .or(() -> findMenuByName(item.menuName(), catalog))
+                                        .orElse(null))
+                        )
+                ));
+    }
+
+    private void hydrateSessionFromDraftItem(
+            OrderSession session,
+            OrderDraft.Item item,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        Optional<MenuCacheResponse.MenuInfo> menu = findMenuById(item.menuId(), catalog)
+                .or(() -> findMenuByName(item.menuName(), catalog));
+        session.setMenuId(menu.map(MenuCacheResponse.MenuInfo::menuId).orElse(item.menuId()));
+        session.setMenu(menu.map(MenuCacheResponse.MenuInfo::name).orElse(item.menuName()));
+        session.setQuantity(item.quantity() == null || item.quantity() < 1 ? 1 : item.quantity());
+        session.setSelectedOptionItemIds(selectedOptionIdsFromDraft(item, menu.orElse(null)));
+        session.setPendingOptionText(item.sourceText());
+    }
+
+    private Set<Long> selectedOptionIdsFromDraft(OrderDraft.Item item, MenuCacheResponse.MenuInfo menu) {
+        if (menu == null) {
+            return Set.of();
+        }
+        Set<Long> selected = new LinkedHashSet<>();
+        java.util.stream.Stream.concat(
+                        emptyIfNull(item.requiredOptions()).stream(),
+                        emptyIfNull(item.optionalOptions()).stream()
+                )
+                .forEach(option -> resolveSelectedOptionId(menu, option)
+                        .ifPresent(selected::add));
+        return selected;
+    }
+
+    private Optional<Long> resolveSelectedOptionId(
+            MenuCacheResponse.MenuInfo menu,
+            OrderDraft.OptionValue option
+    ) {
+        if (option.selectedOptionItemId() != null
+                && findOptionGroupById(menu, option.optionGroupId()).stream()
+                .flatMap(group -> emptyIfNull(group.optionItems()).stream())
+                .map(MenuCacheResponse.OptionItemInfo::optionItemId)
+                .anyMatch(option.selectedOptionItemId()::equals)) {
+            return Optional.of(option.selectedOptionItemId());
+        }
+        return resolveSelectedOptionIdByName(menu, option);
+    }
+
+    private Optional<Long> resolveSelectedOptionIdByName(
+            MenuCacheResponse.MenuInfo menu,
+            OrderDraft.OptionValue option
+    ) {
+        if (option.selectedOptionItemName() == null || option.selectedOptionItemName().isBlank()) {
+            return Optional.empty();
+        }
+        String normalizedName = normalize(option.selectedOptionItemName());
+        return findOptionGroupById(menu, option.optionGroupId()).stream()
+                .flatMap(group -> emptyIfNull(group.optionItems()).stream())
+                .filter(item -> normalize(item.name()).equals(normalizedName))
+                .map(MenuCacheResponse.OptionItemInfo::optionItemId)
+                .findFirst();
+    }
+
+    private Optional<MenuCacheResponse.MenuInfo> findMenuById(
+            Long menuId,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (menuId == null) {
+            return Optional.empty();
+        }
+        return catalog.stream()
+                .flatMap(response -> response.menus().stream())
+                .filter(menu -> menuId.equals(menu.menuId()))
+                .findFirst();
+    }
+
+    private Optional<MenuCacheResponse.OptionGroupInfo> findOptionGroupById(
+            MenuCacheResponse.MenuInfo menu,
+            Long optionGroupId
+    ) {
+        if (menu == null || optionGroupId == null) {
+            return Optional.empty();
+        }
+        return emptyIfNull(menu.optionGroups()).stream()
+                .filter(group -> optionGroupId.equals(group.optionGroupId()))
+                .findFirst();
+    }
+
+    private record DraftMissingOption(
+            OrderDraft.Item item,
+            MenuCacheResponse.MenuInfo menu,
+            MenuCacheResponse.OptionGroupInfo optionGroup
+    ) {
     }
 
     private List<MenuCacheResponse.MenuInfo> findMenusInText(
@@ -414,7 +917,7 @@ public class OrderService {
         return findSelectedMenu(catalog, session)
                 .map(menu -> activeOptionGroups(menu, selectedOptionIds(session)).stream()
                         .anyMatch(group -> emptyIfNull(group.optionItems()).stream()
-                                .anyMatch(item -> optionItemMatchesText(normalizedText, group, item))))
+                                .anyMatch(item -> optionItemMatchesText(normalizedText, item))))
                 .orElse(false);
     }
 
@@ -424,7 +927,7 @@ public class OrderService {
                 .flatMap(response -> response.menus().stream())
                 .flatMap(menu -> emptyIfNull(menu.optionGroups()).stream())
                 .anyMatch(group -> emptyIfNull(group.optionItems()).stream()
-                        .anyMatch(item -> optionItemMatchesText(normalizedText, group, item)));
+                        .anyMatch(item -> optionItemMatchesText(normalizedText, item)));
     }
 
     private boolean hasPendingOptionText(String optionText, Optional<MenuCacheResponse> catalog, OrderSession session) {
@@ -460,73 +963,9 @@ public class OrderService {
 
     private boolean optionItemMatchesText(
             String normalizedText,
-            MenuCacheResponse.OptionGroupInfo group,
             MenuCacheResponse.OptionItemInfo item
     ) {
-        String normalizedItemName = normalize(item.name());
-        if (matchesNameOrAlias(normalizedText, item.name(), item.aliases())) {
-            return true;
-        }
-        if (matchesTemperatureAlias(normalizedText, normalizedItemName)) {
-            return true;
-        }
-        if (matchesCaffeineAlias(normalizedText, normalizedItemName)) {
-            return true;
-        }
-        return isDefaultOption(item)
-                && optionGroupMatchesText(normalizedText, group)
-                && containsAnyNormalized(normalizedText, DEFAULT_OPTION_KW);
-    }
-
-    private boolean matchesTemperatureAlias(String normalizedText, String normalizedItemName) {
-        boolean hotItem = normalizedItemName.equals("hot")
-                || normalizedItemName.contains("핫")
-                || normalizedItemName.contains("뜨거");
-        boolean hotText = normalizedText.contains("hot")
-                || normalizedText.contains("핫")
-                || normalizedText.contains("뜨거");
-        if (hotItem && hotText) {
-            return true;
-        }
-
-        boolean icedItem = normalizedItemName.equals("ice")
-                || normalizedItemName.equals("iced")
-                || normalizedItemName.contains("아이스")
-                || normalizedItemName.contains("차가");
-        boolean icedText = normalizedText.contains("ice")
-                || normalizedText.contains("iced")
-                || normalizedText.contains("아이스")
-                || normalizedText.contains("차가");
-        return icedItem && icedText;
-    }
-
-    private boolean matchesCaffeineAlias(String normalizedText, String normalizedItemName) {
-        boolean decafItem = normalizedItemName.contains("디카페인")
-                || normalizedItemName.contains("decaf")
-                || normalizedItemName.contains("디카");
-        boolean decafText = normalizedText.contains("디카페인")
-                || normalizedText.contains("decaf")
-                || normalizedText.contains("디카");
-        if (decafItem && decafText) {
-            return true;
-        }
-
-        boolean caffeineItem = normalizedItemName.contains("카페인")
-                || normalizedItemName.contains("regular")
-                || normalizedItemName.contains("일반");
-        boolean caffeineText = normalizedText.contains("카페인")
-                || normalizedText.contains("regular")
-                || normalizedText.contains("일반");
-        return caffeineItem && caffeineText && !decafText;
-    }
-
-    private boolean optionGroupMatchesText(String normalizedText, MenuCacheResponse.OptionGroupInfo group) {
-        if (matchesNameOrAlias(normalizedText, group.name(), group.aliases())) {
-            return true;
-        }
-        String normalizedGroupName = normalize(group.name());
-        return List.of("원두", "온도", "사이즈", "얼음", "당도", "샷", "우유").stream()
-                .anyMatch(keyword -> normalizedGroupName.contains(keyword) && normalizedText.contains(keyword));
+        return matchesNameOrAlias(normalizedText, item.name(), item.aliases());
     }
 
     private boolean matchesNameOrAlias(String normalizedText, String name, Collection<String> aliases) {
@@ -537,17 +976,6 @@ public class OrderService {
         return emptyIfNull(aliases).stream()
                 .map(this::normalize)
                 .filter(alias -> !alias.isBlank())
-                .anyMatch(normalizedText::contains);
-    }
-
-    private boolean isDefaultOption(MenuCacheResponse.OptionItemInfo item) {
-        return Boolean.TRUE.equals(item.isDefault())
-                || (item.defaultQuantity() != null && item.defaultQuantity() > 0);
-    }
-
-    private boolean containsAnyNormalized(String normalizedText, List<String> keywords) {
-        return keywords.stream()
-                .map(this::normalize)
                 .anyMatch(normalizedText::contains);
     }
 
@@ -568,20 +996,14 @@ public class OrderService {
 
     private List<OptionSlot> activeOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
         return activeOptionGroups(menu, selectedOptionIds).stream()
-                .map(group -> toOptionSlot(group, selectedOptionIds))
+                .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
                 .toList();
     }
 
     private List<OptionSlot> requiredOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
         return requiredOptionGroups(menu, selectedOptionIds).stream()
                 .limit(1)
-                .map(group -> toOptionSlot(group, selectedOptionIds))
-                .toList();
-    }
-
-    private List<OptionSlot> optionalOptionSlots(MenuCacheResponse.MenuInfo menu, Set<Long> selectedOptionIds) {
-        return optionalOptionGroups(menu, selectedOptionIds).stream()
-                .map(group -> toOptionSlot(group, selectedOptionIds))
+                .map(group -> optionSlotConverter.toOptionSlot(group, selectedOptionIds))
                 .toList();
     }
 
@@ -673,30 +1095,6 @@ public class OrderService {
         return groups.stream()
                 .filter(group -> activeGroupIds.contains(group.optionGroupId()))
                 .toList();
-    }
-
-    private OptionSlot toOptionSlot(MenuCacheResponse.OptionGroupInfo group, Set<Long> selectedOptionIds) {
-        return new OptionSlot(
-                group.optionGroupId(),
-                group.parentOptionItemId(),
-                group.name(),
-                group.isRequired(),
-                group.minSelect(),
-                group.maxSelect(),
-                emptyIfNull(group.optionItems()).stream()
-                        .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
-                        .map(item -> new OptionSlot.OptionCandidate(
-                                item.optionItemId(),
-                                item.name(),
-                                item.extraPrice(),
-                                item.isAvailable(),
-                                item.defaultQuantity(),
-                                item.maxQuantity(),
-                                item.isDefault(),
-                                selectedOptionIds.contains(item.optionItemId())
-                        ))
-                        .toList()
-        );
     }
 
     private SlotExtractionResult extractSlots(
@@ -798,19 +1196,6 @@ public class OrderService {
                 .findFirst();
     }
 
-    private String classifyIntent(String text, Optional<MenuCacheResponse> catalog) {
-        if (containsAny(text, CANCEL_KW)) {
-            return "CANCEL";
-        }
-        if (containsAny(text, CONFIRM_KW) && extractQty(text) == null) {
-            return "CONFIRM";
-        }
-        if (findMenuInText(text, catalog).isPresent() || extractQty(text) != null) {
-            return "ORDER";
-        }
-        return "UNKNOWN";
-    }
-
     private Integer extractQty(String text) {
         Matcher matcher = QTY_DIGIT.matcher(text);
         if (matcher.find()) {
@@ -840,7 +1225,25 @@ public class OrderService {
         return String.format("%s %d개 맞으시죠? 확인해 주세요.", session.getMenu(), session.getQuantity());
     }
 
+    private String multiMenuConfirmationPrompt(OrderSession session) {
+        List<String> menuNames = java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(session.getMenu()),
+                        pendingMenuItems(session).stream().map(OrderSession.PendingMenuItem::getMenu)
+                )
+                .filter(Objects::nonNull)
+                .filter(name -> !name.isBlank())
+                .toList();
+
+        String menuLineup = String.join(", ", menuNames);
+        return String.format("%s, 이렇게 총 %d개 메뉴로 라인업 잡았습니다. 주문하신 메뉴명 맞으신가요?",
+                menuLineup, menuNames.size());
+    }
+
     private String requiredOptionPrompt(List<OptionSlot> slots) {
+        return requiredOptionPrompt(null, slots);
+    }
+
+    private String requiredOptionPrompt(String menuName, List<OptionSlot> slots) {
         if (slots.isEmpty()) {
             return "필수 옵션을 선택해 주세요.";
         }
@@ -848,25 +1251,61 @@ public class OrderService {
         if (optionName == null || optionName.isBlank()) {
             return "필수 옵션을 선택해 주세요.";
         }
+        if (menuName != null && !menuName.isBlank()) {
+            return String.format("%s의 필수 옵션인 %s 옵션을 선택해 주세요.", menuName, optionName);
+        }
         return optionName + " 옵션을 선택해 주세요.";
     }
 
     private String optionalOptionListPrompt(List<MenuCacheResponse.OptionGroupInfo> optionalGroups) {
+        return optionalOptionListPrompt(null, optionalGroups);
+    }
+
+    private String optionalOptionListPrompt(
+            String menuName,
+            List<MenuCacheResponse.OptionGroupInfo> optionalGroups
+    ) {
         if (optionalGroups.isEmpty()) {
             return "추가로 변경할 수 있는 선택 옵션이 없습니다. 확인해 주세요.";
         }
         String optionNames = optionalGroups.stream()
                 .map(MenuCacheResponse.OptionGroupInfo::name)
                 .collect(Collectors.joining(", "));
-        return "변경 가능한 선택 옵션은 " + optionNames + "입니다. 어떤 옵션을 변경하시겠어요? 없으면 확인이라고 말씀해 주세요.";
+        String prefix = menuName == null || menuName.isBlank() ? "" : menuName + "에서 ";
+        return prefix + "변경 가능한 선택 옵션은 " + optionNames + "입니다. 추가할 옵션이 있으면 선택해 주시고, 없으면 없다고 말씀해 주세요.";
+    }
+
+    private String optionChangePrompt(String menuName, String optionGroupName) {
+        if (menuName == null || menuName.isBlank()) {
+            return optionGroupName + " 옵션에서 변경할 값을 선택해 주세요.";
+        }
+        return String.format("%s의 %s 옵션에서 변경할 값을 선택해 주세요.", menuName, optionGroupName);
+    }
+
+    private String optionSelectionConfirmationPrompt(
+            String menuName,
+            String optionGroupName,
+            String optionItemName
+    ) {
+        if (menuName == null || menuName.isBlank()) {
+            return String.format("%s 옵션을 %s(으)로 선택할까요?", optionGroupName, optionItemName);
+        }
+        return String.format("%s의 %s 옵션을 %s(으)로 선택할까요?", menuName, optionGroupName, optionItemName);
+    }
+
+    private String optionRejectedPrompt(String menuName, String optionGroupName) {
+        if (menuName == null || menuName.isBlank()) {
+            return optionGroupName + " 옵션은 반영하지 않았습니다. 다시 선택해 주세요.";
+        }
+        return String.format("%s의 %s 옵션은 반영하지 않았습니다. 다시 선택해 주세요.", menuName, optionGroupName);
     }
 
     private List<String> quickRepliesForOptionalGroups(List<MenuCacheResponse.OptionGroupInfo> optionalGroups) {
         return java.util.stream.Stream.concat(
                         optionalGroups.stream()
                                 .map(MenuCacheResponse.OptionGroupInfo::name)
-                                .limit(7),
-                        java.util.stream.Stream.of("확인")
+                                .limit(6),
+                        java.util.stream.Stream.of("없음", "확인")
                 )
                 .toList();
     }
@@ -889,6 +1328,33 @@ public class OrderService {
             session.setSelectedOptionItemIds(new LinkedHashSet<>());
         }
         return new LinkedHashSet<>(session.getSelectedOptionItemIds());
+    }
+
+    private Set<Long> mergeSelectedOptionIds(
+            MenuCacheResponse.MenuInfo menu,
+            Set<Long> defaults,
+            Set<Long> overrides
+    ) {
+        Set<Long> merged = new LinkedHashSet<>(defaults);
+        if (overrides.isEmpty()) {
+            return merged;
+        }
+        for (MenuCacheResponse.OptionGroupInfo group : emptyIfNull(menu.optionGroups())) {
+            Set<Long> groupOptionIds = emptyIfNull(group.optionItems()).stream()
+                    .map(MenuCacheResponse.OptionItemInfo::optionItemId)
+                    .collect(Collectors.toSet());
+            Set<Long> groupOverrides = overrides.stream()
+                    .filter(groupOptionIds::contains)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (groupOverrides.isEmpty()) {
+                continue;
+            }
+            if (maxSelect(group) == 1) {
+                merged.removeAll(groupOptionIds);
+            }
+            merged.addAll(groupOverrides);
+        }
+        return merged;
     }
 
     private void removeGroupSelections(Set<Long> selected, MenuCacheResponse.OptionGroupInfo group) {
@@ -943,6 +1409,14 @@ public class OrderService {
         return keywords.stream().anyMatch(text::contains);
     }
 
+    private boolean isNoAdditionalOptionText(String text) {
+        String normalizedText = normalize(text);
+        return NO_OPTION_KW.stream()
+                .map(this::normalize)
+                .filter(keyword -> !keyword.isBlank())
+                .anyMatch(normalizedText::contains);
+    }
+
     private String normalize(String value) {
         return value == null ? "" : value.replaceAll("\\s+", "").toLowerCase();
     }
@@ -957,54 +1431,228 @@ public class OrderService {
             OrderSession session,
             String message,
             List<String> quickReplies,
-            List<OptionSlot> optionSlots
+            List<OptionSlot> nextOptionSlots
     ) {
-        boolean slotsComplete = session.isSlotsComplete() && session.getStatus() != OrderStatus.OPTION_FILLING;
-        OrderResponse.PriceInfo priceInfo = calculatePrice(session);
-        return OrderResponse.builder()
-                .sessionId(sid)
-                .intent(intent)
-                .response(message)
-                .slots(OrderResponse.SlotInfo.builder()
-                        .menu(session.getMenu())
-                        .quantity(session.getQuantity())
-                        .optionSlots(optionSlots)
-                        .build())
-                .price(priceInfo)
-                .slotsComplete(slotsComplete)
-                .quickReplies(quickReplies)
-                .build();
+        Optional<MenuCacheResponse> catalog = resolveCatalog(session);
+        List<OrderResponse.OrderItemSlot> orderItems = orderItemSlots(session, catalog);
+        OrderResponse.PriceInfo priceInfo = calculatePrice(session, orderItems);
+        boolean slotsComplete = requiredSlotsComplete(session, catalog);
+        return orderResponseConverter().toResponse(
+                sid,
+                intent,
+                session,
+                message,
+                quickReplies,
+                nextOptionSlots,
+                orderItems,
+                slotsComplete,
+                priceInfo
+        );
     }
 
-    private OrderResponse.PriceInfo calculatePrice(OrderSession session) {
-        Optional<MenuCacheResponse.MenuInfo> selectedMenu = findSelectedMenu(resolveCatalog(session), session);
-        if (selectedMenu.isEmpty()) {
-            Integer accumulatedTotalPrice = accumulatedTotalPrice(session);
-            session.setTotalPrice(accumulatedTotalPrice == 0 ? null : accumulatedTotalPrice);
-            return accumulatedTotalPrice == 0 ? null : OrderResponse.PriceInfo.builder()
-                    .menuPrice(null)
-                    .optionExtraPrice(null)
-                    .unitPrice(null)
-                    .totalPrice(accumulatedTotalPrice)
-                    .build();
+    private List<OrderResponse.OrderItemSlot> orderItemSlots(
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (session.getOrderDraft() != null
+                && session.getOrderDraft().items() != null
+                && !session.getOrderDraft().items().isEmpty()) {
+            List<OrderResponse.OrderItemSlot> draftItems = draftOrderItemSlots(session.getOrderDraft(), catalog);
+            if (!draftItems.isEmpty()) {
+                return draftItems;
+            }
         }
 
-        MenuCacheResponse.MenuInfo menu = selectedMenu.get();
-        int menuPrice = menuPrice(menu);
-        int optionExtraPrice = optionExtraPrice(session, menu);
-        int unitPrice = menuPrice + optionExtraPrice;
-        Integer currentLineTotal = session.getQuantity() == null || session.isCurrentItemFinalized()
-                ? null
-                : unitPrice * session.getQuantity();
-        int totalPrice = accumulatedTotalPrice(session) + (currentLineTotal == null ? 0 : currentLineTotal);
-        session.setTotalPrice(totalPrice);
+        List<OrderResponse.OrderItemSlot> items = new java.util.ArrayList<>();
+        if (session.getMenu() != null || session.getMenuId() != null) {
+            orderItemSlot(
+                    session.getMenuId(),
+                    session.getMenu(),
+                    session.getQuantity(),
+                    selectedOptionIds(session),
+                    catalog
+            ).ifPresent(items::add);
+        }
+        pendingMenuItems(session).forEach(pendingMenuItem -> orderItemSlot(
+                pendingMenuItem.getMenuId(),
+                pendingMenuItem.getMenu(),
+                pendingMenuItem.getQuantity(),
+                new LinkedHashSet<>(emptyIfNull(pendingMenuItem.getSelectedOptionItemIds())),
+                catalog
+        ).ifPresent(items::add));
+        return items;
+    }
 
-        return OrderResponse.PriceInfo.builder()
-                .menuPrice(menuPrice)
-                .optionExtraPrice(optionExtraPrice)
-                .unitPrice(unitPrice)
-                .totalPrice(totalPrice)
-                .build();
+    private List<OrderResponse.OrderItemSlot> draftOrderItemSlots(
+            OrderDraft draft,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        return emptyIfNull(draft.items()).stream()
+                .map(item -> {
+                    Optional<MenuCacheResponse.MenuInfo> menu = findMenuById(item.menuId(), catalog)
+                            .or(() -> findMenuByName(item.menuName(), catalog));
+                    if (menu.isEmpty()) {
+                        return OrderResponse.OrderItemSlot.builder()
+                                .menu(item.menuName())
+                                .quantity(item.quantity())
+                                .optionSlots(List.of())
+                                .build();
+                    }
+                    Set<Long> selectedOptionIds = displaySelectedOptionIds(
+                            menu.get(),
+                            selectedOptionIdsFromDraft(item, menu.get())
+                    );
+                    return OrderResponse.OrderItemSlot.builder()
+                            .menu(menu.get().name())
+                            .quantity(item.quantity())
+                            .menuPrice(menuPrice(menu.get()))
+                            .optionExtraPrice(optionExtraPrice(selectedOptionIds, menu.get()))
+                            .unitPrice(menuPrice(menu.get()) + optionExtraPrice(selectedOptionIds, menu.get()))
+                            .totalPrice(lineTotal(item.quantity(), menu.get(), selectedOptionIds))
+                            .optionSlots(activeOptionSlots(menu.get(), selectedOptionIds))
+                            .build();
+                })
+                .toList();
+    }
+
+    private Optional<OrderResponse.OrderItemSlot> orderItemSlot(
+            Long menuId,
+            String menuName,
+            Integer quantity,
+            Set<Long> selectedOptionIds,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        Optional<MenuCacheResponse.MenuInfo> menu = findMenuById(menuId, catalog)
+                .or(() -> findMenuByName(menuName, catalog));
+        if (menu.isEmpty()) {
+            if (menuName == null && quantity == null) {
+                return Optional.empty();
+            }
+            return Optional.of(OrderResponse.OrderItemSlot.builder()
+                    .menu(menuName)
+                    .quantity(quantity)
+                    .optionSlots(List.of())
+                    .build());
+        }
+
+        Set<Long> displaySelectedOptionIds = displaySelectedOptionIds(menu.get(), selectedOptionIds);
+        return Optional.of(OrderResponse.OrderItemSlot.builder()
+                .menu(menu.get().name())
+                .quantity(quantity)
+                .menuPrice(menuPrice(menu.get()))
+                .optionExtraPrice(optionExtraPrice(displaySelectedOptionIds, menu.get()))
+                .unitPrice(menuPrice(menu.get()) + optionExtraPrice(displaySelectedOptionIds, menu.get()))
+                .totalPrice(lineTotal(quantity, menu.get(), displaySelectedOptionIds))
+                .optionSlots(activeOptionSlots(menu.get(), displaySelectedOptionIds))
+                .build());
+    }
+
+    private Set<Long> displaySelectedOptionIds(
+            MenuCacheResponse.MenuInfo menu,
+            Set<Long> selectedOptionIds
+    ) {
+        return mergeSelectedOptionIds(menu, defaultOptionIds(menu), selectedOptionIds);
+    }
+
+    private boolean requiredSlotsComplete(
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (session.getOrderDraft() != null
+                && session.getOrderDraft().items() != null
+                && !session.getOrderDraft().items().isEmpty()) {
+            return session.getOrderDraft().items().stream()
+                    .allMatch(item -> requiredSlotsComplete(
+                            item.menuId(),
+                            item.menuName(),
+                            item.quantity(),
+                            selectedOptionIdsFromDraft(item, findMenuById(item.menuId(), catalog)
+                                    .or(() -> findMenuByName(item.menuName(), catalog))
+                                    .orElse(null)),
+                            catalog
+                    ));
+        }
+
+        if (session.getMenu() == null && session.getMenuId() == null) {
+            return false;
+        }
+        boolean currentComplete = requiredSlotsComplete(
+                session.getMenuId(),
+                session.getMenu(),
+                session.getQuantity(),
+                selectedOptionIds(session),
+                catalog
+        );
+        if (!currentComplete) {
+            return false;
+        }
+        return pendingMenuItems(session).stream()
+                .allMatch(pendingMenuItem -> requiredSlotsComplete(
+                        pendingMenuItem.getMenuId(),
+                        pendingMenuItem.getMenu(),
+                        pendingMenuItem.getQuantity(),
+                        new LinkedHashSet<>(emptyIfNull(pendingMenuItem.getSelectedOptionItemIds())),
+                        catalog
+                ));
+    }
+
+    private boolean requiredSlotsComplete(
+            Long menuId,
+            String menuName,
+            Integer quantity,
+            Set<Long> selectedOptionIds,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (quantity == null || quantity < 1) {
+            return false;
+        }
+        Optional<MenuCacheResponse.MenuInfo> menu = findMenuById(menuId, catalog)
+                .or(() -> findMenuByName(menuName, catalog));
+        return menu.map(value -> requiredOptionGroups(value, selectedOptionIds).isEmpty())
+                .orElse(false);
+    }
+
+    private int lineTotal(
+            Integer quantity,
+            MenuCacheResponse.MenuInfo menu,
+            Set<Long> selectedOptionIds
+    ) {
+        int safeQuantity = quantity == null || quantity < 1 ? 1 : quantity;
+        return (menuPrice(menu) + optionExtraPrice(selectedOptionIds, menu)) * safeQuantity;
+    }
+
+    private OrderResponse.PriceInfo calculatePrice(
+            OrderSession session,
+            List<OrderResponse.OrderItemSlot> orderItems
+    ) {
+        int accumulatedTotalPrice = accumulatedTotalPrice(session);
+        int menuPrice = emptyIfNull(orderItems).stream()
+                .mapToInt(item -> (item.getMenuPrice() == null ? 0 : item.getMenuPrice())
+                        * (item.getQuantity() == null || item.getQuantity() < 1 ? 1 : item.getQuantity()))
+                .sum();
+        int optionExtraPrice = emptyIfNull(orderItems).stream()
+                .mapToInt(item -> (item.getOptionExtraPrice() == null ? 0 : item.getOptionExtraPrice())
+                        * (item.getQuantity() == null || item.getQuantity() < 1 ? 1 : item.getQuantity()))
+                .sum();
+        int itemTotalPrice = session.isCurrentItemFinalized()
+                ? 0
+                : emptyIfNull(orderItems).stream()
+                .map(OrderResponse.OrderItemSlot::getTotalPrice)
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+        int totalPrice = accumulatedTotalPrice + itemTotalPrice;
+        Integer unitPrice = orderItems.size() == 1 ? orderItems.get(0).getUnitPrice() : null;
+        session.setTotalPrice(totalPrice == 0 ? null : totalPrice);
+
+        if (totalPrice == 0) {
+            return null;
+        }
+        return orderResponseConverter().toPriceInfo(menuPrice, optionExtraPrice, unitPrice, totalPrice);
+    }
+
+    private OrderResponseConverter orderResponseConverter() {
+        return orderResponseConverter == null ? new OrderResponseConverter() : orderResponseConverter;
     }
 
     private void completeCurrentItem(OrderSession session, MenuCacheResponse.MenuInfo menu) {
@@ -1025,8 +1673,12 @@ public class OrderService {
             OrderSession session,
             MenuCacheResponse.MenuInfo menu
     ) {
-        String completedMenu = session.getMenu();
-        Integer completedQuantity = session.getQuantity();
+        String completedMenu = session.getMenu() == null || session.getMenu().isBlank()
+                ? menu.name()
+                : session.getMenu();
+        Integer completedQuantity = session.getQuantity() == null || session.getQuantity() < 1
+                ? 1
+                : session.getQuantity();
         completeCurrentItem(session, menu);
 
         if (startNextPendingMenu(session)) {
@@ -1058,6 +1710,9 @@ public class OrderService {
         session.setMenu(pendingMenuItem.getMenu());
         session.setQuantity(pendingMenuItem.getQuantity());
         session.setPendingOptionText(pendingMenuItem.getPendingOptionText());
+        session.setSelectedOptionItemIds(pendingMenuItem.getSelectedOptionItemIds() == null
+                ? new LinkedHashSet<>()
+                : new LinkedHashSet<>(pendingMenuItem.getSelectedOptionItemIds()));
         return true;
     }
 
@@ -1114,7 +1769,10 @@ public class OrderService {
     }
 
     private int optionExtraPrice(OrderSession session, MenuCacheResponse.MenuInfo menu) {
-        Set<Long> selectedOptionIds = selectedOptionIds(session);
+        return optionExtraPrice(selectedOptionIds(session), menu);
+    }
+
+    private int optionExtraPrice(Set<Long> selectedOptionIds, MenuCacheResponse.MenuInfo menu) {
         return emptyIfNull(menu.optionGroups()).stream()
                 .flatMap(group -> emptyIfNull(group.optionItems()).stream())
                 .filter(item -> selectedOptionIds.contains(item.optionItemId()))

@@ -1,6 +1,7 @@
 package capstone2.voisk.entity;
 
 import jakarta.persistence.*;
+import capstone2.voisk.dto.OrderDraft;
 import lombok.*;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
@@ -20,7 +21,7 @@ public class OrderSession {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "order_session_id")
+    @Column(name = "order_session_id", length = 36)
     private String id;
 
     @Column(name = "total_price")
@@ -70,6 +71,12 @@ public class OrderSession {
     @Transient
     private Long pendingOptionalGroupId;
 
+    @Transient
+    private Long pendingOptionConfirmGroupId;
+
+    @Transient
+    private Long pendingOptionConfirmItemId;
+
     @Builder.Default
     @Transient
     private Integer accumulatedTotalPrice = 0;
@@ -81,10 +88,18 @@ public class OrderSession {
     @Transient
     private Deque<PendingMenuItem> pendingMenuItems = new ArrayDeque<>();
 
+    @Transient
+    private OrderDraft orderDraft;
+
+    @Transient
+    private String previousUtterance;
+
     public void reset() {
         resetCurrentItem();
         this.accumulatedTotalPrice = 0;
         this.pendingMenuItems = new ArrayDeque<>();
+        this.orderDraft = null;
+        this.previousUtterance = null;
     }
 
     public void resetCurrentItem() {
@@ -94,6 +109,8 @@ public class OrderSession {
         this.selectedOptionItemIds = new LinkedHashSet<>();
         this.pendingOptionText = null;
         this.pendingOptionalGroupId = null;
+        this.pendingOptionConfirmGroupId = null;
+        this.pendingOptionConfirmItemId = null;
         this.currentItemFinalized = false;
         this.status = OrderStatus.ORDERING;
     }
@@ -111,5 +128,6 @@ public class OrderSession {
         private String menu;
         private Integer quantity;
         private String pendingOptionText;
+        private Set<Long> selectedOptionItemIds;
     }
 }

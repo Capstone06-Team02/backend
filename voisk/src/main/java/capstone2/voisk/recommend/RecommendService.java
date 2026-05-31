@@ -1,6 +1,7 @@
 package capstone2.voisk.recommend;
 
 import capstone2.voisk.config.BoostConfig;
+import capstone2.voisk.converter.RecommendResponseConverter;
 import capstone2.voisk.embedding.client.EmbedClient;
 import capstone2.voisk.embedding.repository.MenuEmbeddingRepository;
 import capstone2.voisk.entity.Menu;
@@ -24,6 +25,7 @@ public class RecommendService {
     private final MenuEmbeddingRepository menuEmbeddingRepository;
     private final MenuRepository menuRepository;
     private final BoostConfig boostConfig;
+    private final RecommendResponseConverter recommendResponseConverter;
 
     public RecommendResponse recommend(String text, Long storeId) {
         // Step 1: 쿼리 임베딩 — isQuery=true (e5 계열은 쿼리/패시지 프리픽스 구분)
@@ -54,19 +56,13 @@ public class RecommendService {
                 .map(menu -> {
                     double score = similarityMap.get(menu.getMenuId());
                     // V3: score += boostConfig.getWCat() * catMatch + boostConfig.getWPrice() * priceMatch
-                    return new MenuRecommendation(
-                            menu.getMenuId(),
-                            menu.getName(),
-                            menu.getPrice(),
-                            menu.getCategory().getName(),
-                            score
-                    );
+                    return recommendResponseConverter.toRecommendation(menu, score);
                 })
                 .sorted(Comparator.comparingDouble(MenuRecommendation::score).reversed())
                 .limit(5)
                 .toList();
 
-        return new RecommendResponse(recommendations, buildTtsText(recommendations));
+        return recommendResponseConverter.toResponse(recommendations, buildTtsText(recommendations));
     }
 
     private String buildTtsText(List<MenuRecommendation> list) {
