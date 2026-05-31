@@ -2,8 +2,11 @@ package capstone2.voisk.controller;
 
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
+import capstone2.voisk.dto.OrderOptionSelectionRequest;
+import capstone2.voisk.dto.OrderOptionSelectionResponse;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
+import capstone2.voisk.service.OrderOptionSelectionService;
 import capstone2.voisk.service.OrderService;
 import capstone2.voisk.service.StoreMenuCacheService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderOptionSelectionService orderOptionSelectionService;
     private final StoreMenuCacheService storeMenuCacheService;
 
     @Operation(
@@ -47,6 +51,15 @@ public class OrderController {
     @GetMapping("/menus/{menuId}/optional-options")
     public ResponseEntity<MenuOptionalOptionsResponse> getOptionalOptions(@PathVariable Long menuId) {
         return ResponseEntity.ok(orderService.getOptionalOptions(menuId));
+    }
+
+    @Operation(
+        summary = "Select optional option item",
+        description = "Changes the selected optional option item in an active order session."
+    )
+    @PostMapping("/option-selection")
+    public ResponseEntity<OrderOptionSelectionResponse> selectOption(@RequestBody OrderOptionSelectionRequest request) {
+        return ResponseEntity.ok(orderOptionSelectionService.selectOption(request));
     }
 
     @Operation(

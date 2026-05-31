@@ -27,6 +27,7 @@ public class MenuOptionalOptionsResponseConverter {
 
     private MenuOptionalOptionsResponse.OptionGroupInfo toOptionGroupInfo(MenuOptionGroup optionGroup) {
         return new MenuOptionalOptionsResponse.OptionGroupInfo(
+                optionGroup.getId(),
                 optionGroup.getOptionGroupTemplate().getName(),
                 emptyIfNull(optionGroup.getOptionItems()).stream()
                         .filter(item -> !Boolean.FALSE.equals(item.getIsAvailable()))
@@ -38,6 +39,7 @@ public class MenuOptionalOptionsResponseConverter {
 
     private MenuOptionalOptionsResponse.OptionItemInfo toOptionItemInfo(MenuOptionItem optionItem) {
         return new MenuOptionalOptionsResponse.OptionItemInfo(
+                optionItem.getId(),
                 optionItem.getOptionItemTemplate().getName(),
                 isDefaultSelected(optionItem),
                 optionItem.getDefaultQuantity(),

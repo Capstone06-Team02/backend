@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface MenuOptionGroupRepository extends JpaRepository<MenuOptionGroup, Long> {
 
@@ -22,4 +23,16 @@ public interface MenuOptionGroupRepository extends JpaRepository<MenuOptionGroup
             ORDER BY g.sortOrder ASC, g.id ASC, i.sortOrder ASC, i.id ASC
             """)
     List<MenuOptionGroup> findTopLevelOptionalGroupsByMenuId(@Param("menuId") Long menuId);
+
+    @Query("""
+            SELECT DISTINCT g
+            FROM MenuOptionGroup g
+            JOIN FETCH g.menu
+            JOIN FETCH g.optionGroupTemplate
+            LEFT JOIN FETCH g.optionItems i
+            LEFT JOIN FETCH i.optionItemTemplate
+            WHERE g.id = :optionGroupId
+            ORDER BY i.sortOrder ASC, i.id ASC
+            """)
+    Optional<MenuOptionGroup> findByIdWithItems(@Param("optionGroupId") Long optionGroupId);
 }

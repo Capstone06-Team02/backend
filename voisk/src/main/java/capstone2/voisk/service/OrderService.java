@@ -78,6 +78,13 @@ public class OrderService {
     private final OrderResponseConverter orderResponseConverter;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
 
+    Optional<OrderSession> findActiveSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(sessions.get(sessionId));
+    }
+
     @Transactional(readOnly = true)
     public MenuOptionalOptionsResponse getOptionalOptions(Long menuId) {
         Menu menu = menuRepository.findById(menuId)

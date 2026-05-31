@@ -9,12 +9,14 @@ public record MenuOptionalOptionsResponse(
 ) {
 
     public record OptionGroupInfo(
+            Long optionGroupId,
             String optionGroupName,
             List<OptionItemInfo> optionItems
     ) {
     }
 
     public record OptionItemInfo(
+            Long optionItemId,
             String optionItemName,
             Boolean defaultSelected,
             Integer defaultQuantity,
