@@ -19,7 +19,7 @@ public class GeminiConfig {
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
         JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
-        factory.setReadTimeout(Duration.ofSeconds(8));
+        factory.setReadTimeout(Duration.ofSeconds(15));
 
         return RestClient.builder()
                 .baseUrl("https://generativelanguage.googleapis.com")
