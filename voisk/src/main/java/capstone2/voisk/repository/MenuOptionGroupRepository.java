@@ -35,4 +35,17 @@ public interface MenuOptionGroupRepository extends JpaRepository<MenuOptionGroup
             ORDER BY i.sortOrder ASC, i.id ASC
             """)
     Optional<MenuOptionGroup> findByIdWithItems(@Param("optionGroupId") Long optionGroupId);
+
+    @Query("""
+            SELECT DISTINCT g
+            FROM MenuOptionGroup g
+            JOIN FETCH g.optionGroupTemplate
+            LEFT JOIN FETCH g.optionItems i
+            LEFT JOIN FETCH i.optionItemTemplate
+            WHERE g.menu.menuId = :menuId
+              AND g.isRequired = true
+              AND (g.isAvailable IS NULL OR g.isAvailable = true)
+            ORDER BY g.sortOrder ASC, g.id ASC, i.sortOrder ASC, i.id ASC
+            """)
+    List<MenuOptionGroup> findRequiredGroupsByMenuId(@Param("menuId") Long menuId);
 }
