@@ -18,7 +18,7 @@ public class RecommendHintMenu {
     private Long id;
 
     /** 힌트 선택 시 반환되는 메뉴 순서. 값이 작을수록 먼저 노출 */
-    @Column(name = "rank", nullable = false)
+    @Column(name = "menu_rank", nullable = false)
     private Integer rank;
 
     /** 이 매핑이 속한 추천 힌트 */

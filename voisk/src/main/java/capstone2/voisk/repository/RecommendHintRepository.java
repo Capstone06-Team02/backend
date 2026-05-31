@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface RecommendHintRepository extends JpaRepository<RecommendHint, Long> {
 
@@ -18,4 +19,12 @@ public interface RecommendHintRepository extends JpaRepository<RecommendHint, Lo
             ORDER BY h.sortOrder ASC, h.id ASC, hm.rank ASC
             """)
     List<RecommendHint> findByStoreIdWithMenus(@Param("storeId") Long storeId);
+
+    @Query("""
+            SELECT h FROM RecommendHint h
+            JOIN FETCH h.menus hm
+            JOIN FETCH hm.menu m
+            WHERE h.id = :hintId
+            """)
+    Optional<RecommendHint> findByIdWithMenus(@Param("hintId") Long hintId);
 }
