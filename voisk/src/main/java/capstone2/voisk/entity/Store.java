@@ -29,4 +29,8 @@ public class Store {
     @Builder.Default
     @OneToMany(mappedBy = "store")
     private List<Menu> menus = new ArrayList<>();
+
+    @Builder.Default
+    @OneToMany(mappedBy = "store")
+    private List<RecommendHint> recommendHints = new ArrayList<>();
 }
