@@ -1,20 +1,49 @@
 package capstone2.voisk.recommend;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+@Tag(name = "추천", description = "메뉴 추천 API")
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
 public class RecommendController {
 
     private final RecommendService recommendService;
+    private final RecommendHintService recommendHintService;
 
+    @Operation(
+            summary = "추천 요청 직접 입력",
+            description = "사용자가 직접 입력한 텍스트를 임베딩 모델로 분석해 유사한 메뉴를 최대 5개 추천합니다."
+    )
     @PostMapping("/recommend")
     public RecommendResponse recommend(@RequestBody RecommendRequest request) {
         return recommendService.recommend(request.text(), request.storeId());
+    }
+
+    @Operation(
+            summary = "추천 힌트 목록 조회",
+            description = "매장에 등록된 추천 힌트 버튼 목록을 반환합니다. 클라이언트는 이 목록을 버튼으로 렌더링해 사용자가 선택할 수 있게 합니다."
+    )
+    @GetMapping("/recommend/hints")
+    public RecommendHintListResponse getHints(@RequestParam Long storeId) {
+        return recommendHintService.getHints(storeId);
+    }
+
+    @Operation(
+            summary = "힌트 기반 메뉴 추천",
+            description = "선택한 힌트에 사전 매핑된 메뉴를 rank 순서대로 반환합니다. 임베딩 모델을 사용하지 않습니다."
+    )
+    @PostMapping("/recommend/hints/{hintId}")
+    public RecommendHintResponse recommendByHint(@PathVariable Long hintId) {
+        return recommendHintService.recommendByHint(hintId);
     }
 }
