@@ -19,4 +19,8 @@ public interface MenuRepository extends JpaRepository<Menu, Long> {
     List<Menu> findByMenuIdsAndStoreId(@Param("menuIds") List<Long> menuIds, @Param("storeId") Long storeId);
 
 	List<Menu> findByStoreIdOrderByMenuIdAsc(Long storeId);
+
+    // 룰베이스 추천: 판매중 메뉴를 category와 함께 로드 (이름/설명/카테고리 텍스트 매칭 + 응답용)
+    @Query("SELECT m FROM Menu m JOIN FETCH m.category WHERE m.storeId = :storeId AND m.isAvailable = true")
+    List<Menu> findAvailableByStoreIdWithCategory(@Param("storeId") Long storeId);
 }

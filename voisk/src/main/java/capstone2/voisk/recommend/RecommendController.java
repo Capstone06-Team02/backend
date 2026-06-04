@@ -19,6 +19,7 @@ public class RecommendController {
 
     private final RecommendService recommendService;
     private final RecommendHintService recommendHintService;
+    private final RuleRecommendService ruleRecommendService;
 
     @Operation(
             summary = "추천 요청 직접 입력",
@@ -27,6 +28,16 @@ public class RecommendController {
     @PostMapping("/recommend")
     public RecommendResponse recommend(@RequestBody RecommendRequest request) {
         return recommendService.recommend(request.text(), request.storeId());
+    }
+
+    @Operation(
+            summary = "룰베이스 추천 요청 직접 입력",
+            description = "임베딩 모델 없이 키워드 규칙 사전으로 메뉴를 점수화해 최대 5개 추천합니다. "
+                    + "각 결과에 매칭된 규칙(matchedRules)을 함께 반환해 추천 근거를 설명합니다."
+    )
+    @PostMapping("/recommend/rule")
+    public RuleRecommendResponse recommendByRule(@RequestBody RecommendRequest request) {
+        return ruleRecommendService.recommend(request.text(), request.storeId());
     }
 
     @Operation(
