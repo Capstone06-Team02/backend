@@ -4,13 +4,16 @@ import capstone2.voisk.converter.MenuOptionalOptionsResponseConverter;
 import capstone2.voisk.converter.OptionSlotConverter;
 import capstone2.voisk.converter.OrderResponseConverter;
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
+import capstone2.voisk.dto.OptionGroupDescriptionResponse;
 import capstone2.voisk.dto.OptionSlot;
 import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.Menu;
+import capstone2.voisk.entity.MenuOptionGroup;
 import capstone2.voisk.entity.MenuOptionItem;
 import capstone2.voisk.entity.OrderMenu;
 import capstone2.voisk.entity.OrderMenuOption;
@@ -93,6 +96,24 @@ public class OrderService {
         return menuOptionalOptionsResponseConverter.toResponse(
                 menu,
                 menuOptionGroupRepository.findTopLevelOptionalGroupsByMenuId(menuId)
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public MenuDescriptionResponse getMenuDescription(Long menuId) {
+        Menu menu = menuRepository.findById(menuId)
+                .orElseThrow(() -> new IllegalArgumentException("Menu not found. menuId=" + menuId));
+        return new MenuDescriptionResponse(menu.getMenuId(), menu.getName(), menu.getDescription());
+    }
+
+    @Transactional(readOnly = true)
+    public OptionGroupDescriptionResponse getOptionGroupDescription(Long optionGroupId) {
+        MenuOptionGroup optionGroup = menuOptionGroupRepository.findById(optionGroupId)
+                .orElseThrow(() -> new IllegalArgumentException("Option group not found. optionGroupId=" + optionGroupId));
+        return new OptionGroupDescriptionResponse(
+                optionGroup.getId(),
+                optionGroup.getOptionGroupTemplate().getName(),
+                optionGroup.getOptionGroupTemplate().getDescription()
         );
     }
 

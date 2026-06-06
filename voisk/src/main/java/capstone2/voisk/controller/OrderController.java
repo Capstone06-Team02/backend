@@ -1,7 +1,9 @@
 package capstone2.voisk.controller;
 
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
+import capstone2.voisk.dto.OptionGroupDescriptionResponse;
 import capstone2.voisk.dto.OrderOptionSelectionRequest;
 import capstone2.voisk.dto.OrderOptionSelectionResponse;
 import capstone2.voisk.dto.OrderRequest;
@@ -57,8 +59,26 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "주문 세션 선택 옵션 변경",
-            description = "활성 주문 세션에서 특정 메뉴의 선택 옵션을 지정한 옵션 아이템으로 변경합니다."
+            summary = "메뉴 설명 조회",
+            description = "메뉴 ID로 메뉴명과 메뉴 설명만 조회합니다."
+    )
+    @GetMapping("/menus/{menuId}/description")
+    public ResponseEntity<MenuDescriptionResponse> getMenuDescription(@PathVariable Long menuId) {
+        return ResponseEntity.ok(orderService.getMenuDescription(menuId));
+    }
+
+    @Operation(
+            summary = "옵션 그룹 설명 조회",
+            description = "옵션 그룹 ID로 옵션 그룹명과 옵션 그룹 설명만 조회합니다."
+    )
+    @GetMapping("/option-groups/{optionGroupId}/description")
+    public ResponseEntity<OptionGroupDescriptionResponse> getOptionGroupDescription(@PathVariable Long optionGroupId) {
+        return ResponseEntity.ok(orderService.getOptionGroupDescription(optionGroupId));
+    }
+
+    @Operation(
+            summary = "주문 세션 옵션 변경",
+            description = "활성 주문 세션에서 특정 메뉴의 필수 또는 선택 옵션을 지정한 옵션 아이템으로 변경합니다."
     )
     @PostMapping("/option-selection")
     public ResponseEntity<OrderOptionSelectionResponse> selectOption(@RequestBody OrderOptionSelectionRequest request) {
