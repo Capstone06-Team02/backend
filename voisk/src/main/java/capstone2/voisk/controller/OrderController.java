@@ -1,7 +1,9 @@
 package capstone2.voisk.controller;
 
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
+import capstone2.voisk.dto.OptionGroupDescriptionResponse;
 import capstone2.voisk.dto.OrderOptionSelectionRequest;
 import capstone2.voisk.dto.OrderOptionSelectionResponse;
 import capstone2.voisk.dto.OrderRequest;
@@ -54,6 +56,24 @@ public class OrderController {
     @GetMapping("/menus/{menuId}/optional-options")
     public ResponseEntity<MenuOptionalOptionsResponse> getOptionalOptions(@PathVariable Long menuId) {
         return ResponseEntity.ok(orderService.getOptionalOptions(menuId));
+    }
+
+    @Operation(
+            summary = "메뉴 설명 조회",
+            description = "메뉴 ID로 메뉴명과 메뉴 설명만 조회합니다."
+    )
+    @GetMapping("/menus/{menuId}/description")
+    public ResponseEntity<MenuDescriptionResponse> getMenuDescription(@PathVariable Long menuId) {
+        return ResponseEntity.ok(orderService.getMenuDescription(menuId));
+    }
+
+    @Operation(
+            summary = "옵션 그룹 설명 조회",
+            description = "옵션 그룹 ID로 옵션 그룹명과 옵션 그룹 설명만 조회합니다."
+    )
+    @GetMapping("/option-groups/{optionGroupId}/description")
+    public ResponseEntity<OptionGroupDescriptionResponse> getOptionGroupDescription(@PathVariable Long optionGroupId) {
+        return ResponseEntity.ok(orderService.getOptionGroupDescription(optionGroupId));
     }
 
     @Operation(
