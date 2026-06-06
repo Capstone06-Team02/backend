@@ -70,9 +70,6 @@ public class OrderOptionSelectionService {
         if (optionGroup.getMenu() == null || !Objects.equals(optionGroup.getMenu().getMenuId(), menuId)) {
             throw new IllegalArgumentException("Option group does not belong to menu. menuId=" + menuId);
         }
-        if (Boolean.TRUE.equals(optionGroup.getIsRequired())) {
-            throw new IllegalArgumentException("Option group is not optional. optionGroupId=" + optionGroup.getId());
-        }
         if (Boolean.FALSE.equals(optionGroup.getIsAvailable())) {
             throw new IllegalArgumentException("Option group is not available. optionGroupId=" + optionGroup.getId());
         }

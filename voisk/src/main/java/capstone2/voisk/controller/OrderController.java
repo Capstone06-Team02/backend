@@ -57,8 +57,8 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "주문 세션 선택 옵션 변경",
-            description = "활성 주문 세션에서 특정 메뉴의 선택 옵션을 지정한 옵션 아이템으로 변경합니다."
+            summary = "주문 세션 옵션 변경",
+            description = "활성 주문 세션에서 특정 메뉴의 필수 또는 선택 옵션을 지정한 옵션 아이템으로 변경합니다."
     )
     @PostMapping("/option-selection")
     public ResponseEntity<OrderOptionSelectionResponse> selectOption(@RequestBody OrderOptionSelectionRequest request) {
