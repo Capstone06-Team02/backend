@@ -30,9 +30,10 @@ embed:
   server:
     url: ${EMBED_SERVER_URL:http://localhost:8000}
 
-boost:
-  w-cat: 0.10
-  w-price: 0.05
+# 추천 패시지에 옵션(온도/사이즈 등) 텍스트 포함 여부.
+# true로 바꾸고 재기동하면 embedding_source 태그가 달라져 자동으로 재임베딩된다.
+embedding:
+  include-options: ${EMBED_INCLUDE_OPTIONS:false}
 
 gemini:
   api-key: ${GEMINI_API_KEY}

@@ -1,6 +1,5 @@
 package capstone2.voisk.recommend;
 
-import capstone2.voisk.config.BoostConfig;
 import capstone2.voisk.converter.RecommendResponseConverter;
 import capstone2.voisk.embedding.client.EmbedClient;
 import capstone2.voisk.embedding.repository.MenuEmbeddingRepository;
@@ -24,9 +23,12 @@ public class RecommendService {
     private final EmbedClient embedClient;
     private final MenuEmbeddingRepository menuEmbeddingRepository;
     private final MenuRepository menuRepository;
-    private final BoostConfig boostConfig;
     private final RecommendResponseConverter recommendResponseConverter;
 
+    /**
+     * 순수 임베딩 추천 — pgvector 코사인 유사도로만 정렬한다(사전·규칙 없이 의미 유사도만 사용 → 범용성 유지).
+     * 패시지는 옵션 텍스트를 포함할 수 있고({@code embedding.include-options}), 점수는 0~1로 정규화해 반환한다.
+     */
     public RecommendResponse recommend(String text, Long storeId) {
         // Step 1: 쿼리 임베딩 — isQuery=true (e5 계열은 쿼리/패시지 프리픽스 구분)
         float[] queryVec;
@@ -51,18 +53,32 @@ public class RecommendService {
         List<Long> menuIds = new ArrayList<>(similarityMap.keySet());
         List<Menu> menus = menuRepository.findByMenuIdsAndStoreId(menuIds, storeId);
 
-        // Step 5: 부스트 적용 후 score 내림차순 정렬 → top-5
-        List<MenuRecommendation> recommendations = menus.stream()
+        // Step 5: 코사인 점수 정렬 → top-5 (점수는 0~1 정규화해 표시)
+        List<MenuRecommendation> recommendations = score(menus, similarityMap);
+
+        return recommendResponseConverter.toResponse(recommendations, buildTtsText(recommendations));
+    }
+
+    // 코사인 유사도로 정렬. min-max 정규화는 단조변환이라 순위는 코사인 원점수와 동일하며,
+    // score 필드를 0~1 스케일로 보기 좋게 만들어 줄 뿐이다(평탄도 진단용 score 분리도 확인에도 사용).
+    private List<MenuRecommendation> score(List<Menu> menus, Map<Long, Double> similarityMap) {
+        if (menus.isEmpty()) {
+            return List.of();
+        }
+
+        double min = menus.stream().mapToDouble(m -> similarityMap.get(m.getMenuId())).min().orElse(0);
+        double max = menus.stream().mapToDouble(m -> similarityMap.get(m.getMenuId())).max().orElse(0);
+        double range = max - min;
+
+        return menus.stream()
                 .map(menu -> {
-                    double score = similarityMap.get(menu.getMenuId());
-                    // V3: score += boostConfig.getWCat() * catMatch + boostConfig.getWPrice() * priceMatch
-                    return recommendResponseConverter.toRecommendation(menu, score);
+                    double cosine = similarityMap.get(menu.getMenuId());
+                    double norm = range == 0 ? 0.0 : (cosine - min) / range;
+                    return recommendResponseConverter.toRecommendation(menu, norm);
                 })
                 .sorted(Comparator.comparingDouble(MenuRecommendation::score).reversed())
                 .limit(5)
                 .toList();
-
-        return recommendResponseConverter.toResponse(recommendations, buildTtsText(recommendations));
     }
 
     private String buildTtsText(List<MenuRecommendation> list) {
