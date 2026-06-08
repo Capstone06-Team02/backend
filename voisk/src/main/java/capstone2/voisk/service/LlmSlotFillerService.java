@@ -201,7 +201,6 @@ public class LlmSlotFillerService {
                     candidateJson.put("defaultQuantity", item.defaultQuantity() == null ? 0 : item.defaultQuantity());
                     candidateJson.put("defaultSelected", isDefaultSelected(item));
                     candidateJson.put("selected", selectedOptionIds.contains(item.optionItemId()));
-                    candidateJson.put("aliases", emptyIfNull(item.aliases()));
                     return candidateJson;
                 })
                 .toList());
