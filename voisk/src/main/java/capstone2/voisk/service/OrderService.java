@@ -28,6 +28,7 @@ import capstone2.voisk.repository.OrderMenuRepository;
 import capstone2.voisk.repository.OrderSessionRepository;
 import capstone2.voisk.repository.StoreRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +52,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class OrderService {
 
     private static final List<String> OPTION_REMOVE_KW = List.of("빼", "없이", "제외", "삭제", "안 넣", "넣지 마");
@@ -128,7 +130,12 @@ public class OrderService {
 
         String text = request.getInput() == null ? "" : request.getInput().trim();
         Optional<MenuCacheResponse> catalog = resolveCatalog(session);
+        Optional<OrderResponse> exactOptionResponse = handleExactOptionItemOnlyInput(sid, text, session, catalog);
+        if (exactOptionResponse.isPresent()) {
+            return exactOptionResponse.get();
+        }
         seedOrderDraftFromText(text, session, catalog);
+        log.info("[speak] route=LLM sessionId={} status={} input=\"{}\"", sid, session.getStatus(), text);
         SlotExtractionResult extracted = extractSlots(text, session, catalog);
         String intent = extracted.intent();
         String currentOptionText = optionAwareText(text, extracted);
@@ -410,6 +417,129 @@ public class OrderService {
             }
         }
         return Optional.empty();
+    }
+
+    private Optional<OrderResponse> handleExactOptionItemOnlyInput(
+            String sid,
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (session.getStatus() != OrderStatus.OPTION_FILLING
+                || hasPendingOptionConfirmation(session)
+                || text == null
+                || text.isBlank()) {
+            return Optional.empty();
+        }
+
+        Optional<MenuCacheResponse.MenuInfo> selectedMenu = findSelectedMenu(catalog, session);
+        if (selectedMenu.isEmpty()) {
+            return Optional.empty();
+        }
+
+        MenuCacheResponse.MenuInfo menu = selectedMenu.get();
+        Set<Long> selected = selectedOptionIds(session);
+        List<MenuCacheResponse.OptionGroupInfo> targetGroups = exactOptionTargetGroups(session, menu, selected);
+        Optional<OptionSelection> selection = findExactOptionSelection(text, targetGroups);
+        if (selection.isEmpty()) {
+            log.info(
+                    "[speak] route=OPTION_ITEM_EXACT_MISS sessionId={} input=\"{}\" menu=\"{}\" targetOptions={}",
+                    sid,
+                    text,
+                    menu.name(),
+                    exactOptionCandidates(targetGroups)
+            );
+            return Optional.empty();
+        }
+
+        OptionSelection selectedOption = selection.get();
+        log.info(
+                "[speak] route=OPTION_ITEM_EXACT sessionId={} input=\"{}\" menu=\"{}\" optionGroup=\"{}\" optionItem=\"{}\" matchedBy={}",
+                sid,
+                text,
+                menu.name(),
+                selectedOption.group().name(),
+                selectedOption.item().name(),
+                exactOptionMatchType(text, selectedOption.item())
+        );
+
+        applyConfirmedOptionSelection(session, menu, selectedOption.group(), selectedOption.item());
+        session.setPendingOptionalGroupId(null);
+        return Optional.of(continueAfterConfirmedOptionSelection(sid, "ORDER", session, menu));
+    }
+
+    private List<MenuCacheResponse.OptionGroupInfo> exactOptionTargetGroups(
+            OrderSession session,
+            MenuCacheResponse.MenuInfo menu,
+            Set<Long> selectedOptionIds
+    ) {
+        List<MenuCacheResponse.OptionGroupInfo> requiredGroups = requiredOptionGroups(menu, selectedOptionIds);
+        if (!requiredGroups.isEmpty()) {
+            return requiredGroups.stream().limit(1).toList();
+        }
+
+        List<MenuCacheResponse.OptionGroupInfo> optionalGroups = optionalOptionGroups(menu, selectedOptionIds);
+        return findPendingOptionalGroup(session, optionalGroups)
+                .map(List::of)
+                .orElse(optionalGroups);
+    }
+
+    private Optional<OptionSelection> findExactOptionSelection(
+            String text,
+            Collection<MenuCacheResponse.OptionGroupInfo> targetGroups
+    ) {
+        String normalizedText = normalize(text);
+        if (normalizedText.isBlank()) {
+            return Optional.empty();
+        }
+
+        List<OptionSelection> matches = new java.util.ArrayList<>();
+        for (MenuCacheResponse.OptionGroupInfo group : targetGroups) {
+            for (MenuCacheResponse.OptionItemInfo item : emptyIfNull(group.optionItems())) {
+                if (!Boolean.FALSE.equals(item.isAvailable())
+                        && optionItemExactlyMatchesText(normalizedText, item)) {
+                    matches.add(new OptionSelection(group, item));
+                }
+            }
+        }
+        return matches.size() == 1 ? Optional.of(matches.get(0)) : Optional.empty();
+    }
+
+    private String exactOptionCandidates(Collection<MenuCacheResponse.OptionGroupInfo> targetGroups) {
+        return targetGroups.stream()
+                .flatMap(group -> emptyIfNull(group.optionItems()).stream()
+                        .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
+                        .map(item -> String.format(
+                                "%s:%s aliases=[%s]",
+                                group.name(),
+                                item.name(),
+                                String.join(",", emptyIfNull(item.aliases()))
+                        )))
+                .limit(20)
+                .collect(Collectors.joining(" | "));
+    }
+
+    private boolean optionItemExactlyMatchesText(
+            String normalizedText,
+            MenuCacheResponse.OptionItemInfo item
+    ) {
+        String normalizedName = normalize(item.name());
+        if (!normalizedName.isBlank() && normalizedName.equals(normalizedText)) {
+            return true;
+        }
+        return emptyIfNull(item.aliases()).stream()
+                .map(this::normalize)
+                .filter(alias -> !alias.isBlank())
+                .anyMatch(normalizedText::equals);
+    }
+
+    private String exactOptionMatchType(String text, MenuCacheResponse.OptionItemInfo item) {
+        String normalizedText = normalize(text);
+        String normalizedName = normalize(item.name());
+        if (!normalizedName.isBlank() && normalizedName.equals(normalizedText)) {
+            return "ITEM_NAME";
+        }
+        return "ITEM_ALIAS";
     }
 
     private OrderResponse askOptionSelectionConfirmation(
@@ -734,6 +864,7 @@ public class OrderService {
         if (missingOption.isPresent()) {
             DraftMissingOption missing = missingOption.get();
             hydrateSessionFromDraftItem(session, missing.item(), catalog);
+            session.setStatus(OrderStatus.OPTION_FILLING);
             OptionSlot optionSlot = optionSlotConverter.toOptionSlot(
                     missing.optionGroup(),
                     selectedOptionIdsFromDraft(missing.item(), missing.menu())
