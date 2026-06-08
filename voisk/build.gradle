@@ -37,4 +37,8 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	// 라이브 평가 하네스용 시스템 프로퍼티를 포크된 테스트 JVM으로 전달 (-Dvoisk.storeId 등)
+	['voisk.baseUrl', 'voisk.storeId'].each { k ->
+		if (System.getProperty(k) != null) systemProperty k, System.getProperty(k)
+	}
 }

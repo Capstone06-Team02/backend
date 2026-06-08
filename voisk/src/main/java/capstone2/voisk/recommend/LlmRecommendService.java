@@ -77,10 +77,10 @@ public class LlmRecommendService {
 
         List<Menu> candidates = menuRepository.findAvailableByStoreIdWithCategory(storeId);
         if (candidates.isEmpty()) {
-            return new LlmRecommendResponse(List.of(), emptyTts());
+            return new LlmRecommendResponse(List.of(), emptyTts(), LlmRecommendResponse.TokenUsage.zero());
         }
 
-        List<Long> llmMenuIds = callGemini(text == null ? "" : text.trim(), candidates);
+        GeminiResult gemini = callGemini(text == null ? "" : text.trim(), candidates);
 
         // 출력 검증: 후보 집합에 실제로 존재하는 menuId만 통과시키고, DB 엔티티 값으로 결과를 구성한다.
         Map<Long, Menu> candidateById = candidates.stream()
@@ -88,7 +88,7 @@ public class LlmRecommendService {
 
         List<LlmMenuRecommendation> result = new ArrayList<>();
         Set<Long> seen = new LinkedHashSet<>();
-        for (Long id : llmMenuIds) {
+        for (Long id : gemini.ids()) {
             Menu menu = candidateById.get(id);
             if (menu == null || !seen.add(id)) {
                 continue; // 환각 id 또는 중복 폐기
@@ -100,11 +100,14 @@ public class LlmRecommendService {
             }
         }
 
-        return new LlmRecommendResponse(result, buildTtsText(result));
+        return new LlmRecommendResponse(result, buildTtsText(result), gemini.usage());
     }
 
-    /** Gemini를 호출해 추천 menuId 목록을 받는다. 실패 시 빈 목록(→ 빈 추천)으로 폴백. */
-    private List<Long> callGemini(String userInput, List<Menu> candidates) {
+    /** callGemini 반환 묶음: 추천 menuId 목록 + 이번 호출 토큰 사용량. */
+    private record GeminiResult(List<Long> ids, LlmRecommendResponse.TokenUsage usage) {}
+
+    /** Gemini를 호출해 추천 menuId 목록과 토큰 사용량을 받는다. 실패 시 빈 목록·0 토큰으로 폴백. */
+    private GeminiResult callGemini(String userInput, List<Menu> candidates) {
         try {
             Map<String, Object> systemInstruction = Map.of(
                     "parts", List.of(Map.of("text", SYSTEM_PROMPT))
@@ -145,10 +148,17 @@ public class LlmRecommendService {
                     }
                 }
             }
-            return ids;
+
+            // 비용 측정용 토큰 사용량 (Gemini usageMetadata)
+            JsonNode usage = root.path("usageMetadata");
+            LlmRecommendResponse.TokenUsage tokenUsage = new LlmRecommendResponse.TokenUsage(
+                    usage.path("promptTokenCount").asInt(0),
+                    usage.path("candidatesTokenCount").asInt(0),
+                    usage.path("totalTokenCount").asInt(0));
+            return new GeminiResult(ids, tokenUsage);
         } catch (Exception e) {
             log.error("[Gemini] 추천 실패 - input: \"{}\", error: {}", userInput, e.getMessage());
-            return List.of();
+            return new GeminiResult(List.of(), LlmRecommendResponse.TokenUsage.zero());
         }
     }
 

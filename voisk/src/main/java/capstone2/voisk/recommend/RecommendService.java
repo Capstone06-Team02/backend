@@ -25,6 +25,10 @@ public class RecommendService {
     private final MenuRepository menuRepository;
     private final RecommendResponseConverter recommendResponseConverter;
 
+    // pgvector는 storeId를 모르므로(menu_id·벡터만 보관) 전역 top-K를 뽑은 뒤 MySQL에서 매장 필터를 한다.
+    // 여러 매장 임베딩이 한 테이블에 공존하면 K가 작을수록 매장 필터 후 후보가 부족해진다 → 넉넉히 둔다.
+    private static final int CANDIDATE_POOL_SIZE = 100;
+
     /**
      * 순수 임베딩 추천 — pgvector 코사인 유사도로만 정렬한다(사전·규칙 없이 의미 유사도만 사용 → 범용성 유지).
      * 패시지는 옵션 텍스트를 포함할 수 있고({@code embedding.include-options}), 점수는 0~1로 정규화해 반환한다.
@@ -38,9 +42,9 @@ public class RecommendService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "추천 서버에 연결할 수 없습니다.");
         }
 
-        // Step 2: pgvector 코사인 유사도 top-20 (storeId 무관, 이후 Step 4에서 필터)
+        // Step 2: pgvector 코사인 유사도 전역 top-K (storeId 무관, 이후 Step 4에서 매장 필터)
         String queryVecStr = toVectorString(queryVec);
-        List<Object[]> rawResults = menuEmbeddingRepository.findTopKBySimilarity(queryVecStr, 20);
+        List<Object[]> rawResults = menuEmbeddingRepository.findTopKBySimilarity(queryVecStr, CANDIDATE_POOL_SIZE);
 
         // Step 3: [menu_id, similarity] → Map (BigInteger 등 Number 하위 타입 대응)
         Map<Long, Double> similarityMap = rawResults.stream()
