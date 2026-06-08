@@ -214,7 +214,7 @@ public class LlmSlotFillerService {
         return catalog.stream()
                 .flatMap(response -> response.menus().stream())
                 .filter(menu -> (item.menuId() != null && item.menuId().equals(menu.menuId()))
-                        || normalize(menu.name()).equals(normalize(item.menuName())))
+                        || menuNameOrAliasEquals(menu, item.menuName()))
                 .findFirst();
     }
 
@@ -266,9 +266,29 @@ public class LlmSlotFillerService {
         String candidates = catalog.stream()
                 .flatMap(response -> response.menus().stream())
                 .filter(menu -> !Boolean.FALSE.equals(menu.isAvailable()))
-                .map(menu -> "- " + menu.name())
+                .map(menu -> {
+                    String aliases = emptyIfNull(menu.aliases()).stream()
+                            .filter(alias -> alias != null && !alias.isBlank())
+                            .collect(Collectors.joining(", "));
+                    return aliases.isBlank()
+                            ? "- " + menu.name()
+                            : "- " + menu.name() + " (aliases: " + aliases + ")";
+                })
                 .collect(Collectors.joining("\n"));
         return "[메뉴 후보]\n" + (candidates.isBlank() ? "없음" : candidates);
+    }
+
+    private boolean menuNameOrAliasEquals(MenuCacheResponse.MenuInfo menu, String value) {
+        String normalizedValue = normalize(value);
+        if (normalizedValue.isBlank()) {
+            return false;
+        }
+        return java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(menu.name()),
+                        emptyIfNull(menu.aliases()).stream()
+                )
+                .map(this::normalize)
+                .anyMatch(normalizedValue::equals);
     }
 
     private boolean shouldIncludeMenuCandidates(String userInput, OrderSession session) {

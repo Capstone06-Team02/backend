@@ -905,16 +905,16 @@ public class OrderService {
         String normalizedText = normalize(text);
         List<MatchedMenu> matches = catalog.stream()
                 .flatMap(response -> response.menus().stream())
-                .filter(menu -> menu.name() != null && !menu.name().isBlank())
-                .map(menu -> {
-                    String normalizedMenuName = normalize(menu.name());
-                    int start = normalizedText.indexOf(normalizedMenuName);
-                    return new MatchedMenu(menu, start, start + normalizedMenuName.length());
-                })
+                .flatMap(menu -> menuMatchTerms(menu).stream()
+                        .map(term -> {
+                            int start = normalizedText.indexOf(term.value());
+                            return new MatchedMenu(menu, start, start + term.value().length(), term.canonical());
+                        }))
                 .filter(match -> match.start() >= 0)
                 .sorted(Comparator
                         .comparingInt(MatchedMenu::start)
-                        .thenComparing(match -> match.end() - match.start(), Comparator.reverseOrder()))
+                        .thenComparing(match -> match.end() - match.start(), Comparator.reverseOrder())
+                        .thenComparing(MatchedMenu::canonical, Comparator.reverseOrder()))
                 .toList();
 
         List<MatchedMenu> nonOverlappingMatches = new java.util.ArrayList<>();
@@ -930,7 +930,45 @@ public class OrderService {
                 .toList();
     }
 
-    private record MatchedMenu(MenuCacheResponse.MenuInfo menu, int start, int end) {
+    private List<MenuMatchTerm> menuMatchTerms(MenuCacheResponse.MenuInfo menu) {
+        List<MenuMatchTerm> terms = new java.util.ArrayList<>();
+        String normalizedName = normalize(menu.name());
+        if (!normalizedName.isBlank()) {
+            terms.add(new MenuMatchTerm(normalizedName, true));
+        }
+        emptyIfNull(menu.aliases()).stream()
+                .map(this::normalize)
+                .filter(alias -> !alias.isBlank())
+                .distinct()
+                .map(alias -> new MenuMatchTerm(alias, false))
+                .forEach(terms::add);
+        return terms.stream()
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toMap(
+                                MenuMatchTerm::value,
+                                term -> term,
+                                (left, right) -> left.canonical() ? left : right,
+                                java.util.LinkedHashMap::new
+                        ),
+                        map -> List.copyOf(map.values())
+                ));
+    }
+
+    private List<String> menuMatchTermValues(MenuCacheResponse.MenuInfo menu) {
+        return java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(menu.name()),
+                        emptyIfNull(menu.aliases()).stream()
+                )
+                .map(this::normalize)
+                .filter(term -> !term.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private record MenuMatchTerm(String value, boolean canonical) {
+    }
+
+    private record MatchedMenu(MenuCacheResponse.MenuInfo menu, int start, int end, boolean canonical) {
     }
 
     private boolean hasOptionSelection(String text, Optional<MenuCacheResponse> catalog, OrderSession session) {
@@ -1201,7 +1239,7 @@ public class OrderService {
         String normalizedMenuName = normalize(menuName);
         return catalog.stream()
                 .flatMap(response -> response.menus().stream())
-                .filter(menu -> normalize(menu.name()).equals(normalizedMenuName))
+                .filter(menu -> menuMatchTermValues(menu).stream().anyMatch(term -> term.equals(normalizedMenuName)))
                 .findFirst();
     }
 
