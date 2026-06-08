@@ -19,6 +19,8 @@ public class RecommendController {
 
     private final RecommendService recommendService;
     private final RecommendHintService recommendHintService;
+    private final RuleRecommendService ruleRecommendService;
+    private final LlmRecommendService llmRecommendService;
 
     @Operation(
             summary = "추천 요청 직접 입력",
@@ -27,6 +29,26 @@ public class RecommendController {
     @PostMapping("/recommend")
     public RecommendResponse recommend(@RequestBody RecommendRequest request) {
         return recommendService.recommend(request.text(), request.storeId());
+    }
+
+    @Operation(
+            summary = "룰베이스 추천 요청 직접 입력",
+            description = "임베딩 모델 없이 키워드 규칙 사전으로 메뉴를 점수화해 최대 5개 추천합니다. "
+                    + "각 결과에 매칭된 규칙(matchedRules)을 함께 반환해 추천 근거를 설명합니다."
+    )
+    @PostMapping("/recommend/rule")
+    public RuleRecommendResponse recommendByRule(@RequestBody RecommendRequest request) {
+        return ruleRecommendService.recommend(request.text(), request.storeId());
+    }
+
+    @Operation(
+            summary = "LLM 추천 요청 직접 입력",
+            description = "사용자 발화를 Gemini에 보내 메뉴를 최대 3개 추천합니다. 해당 매장의 판매중 메뉴만 후보로 제공하고, "
+                    + "LLM이 고른 menuId를 DB 후보와 대조 검증해 환각을 차단합니다. 이름·가격·카테고리는 DB 원본값으로 채웁니다."
+    )
+    @PostMapping("/recommend/llm")
+    public LlmRecommendResponse recommendByLlm(@RequestBody RecommendRequest request) {
+        return llmRecommendService.recommend(request.text(), request.storeId());
     }
 
     @Operation(
