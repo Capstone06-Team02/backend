@@ -28,7 +28,7 @@ public class RecommendController {
     )
     @PostMapping("/recommend")
     public RecommendResponse recommend(@RequestBody RecommendRequest request) {
-        return recommendService.recommend(request.text(), request.storeId());
+        return recommendService.recommend(request.text(), request.storeId(), request.topK());
     }
 
     @Operation(

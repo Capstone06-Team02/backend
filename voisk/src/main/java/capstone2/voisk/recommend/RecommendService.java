@@ -28,12 +28,23 @@ public class RecommendService {
     // pgvector는 storeId를 모르므로(menu_id·벡터만 보관) 전역 top-K를 뽑은 뒤 MySQL에서 매장 필터를 한다.
     // 여러 매장 임베딩이 한 테이블에 공존하면 K가 작을수록 매장 필터 후 후보가 부족해진다 → 넉넉히 둔다.
     private static final int CANDIDATE_POOL_SIZE = 100;
+    /** 반환 후보 기본 개수(프로덕션 TTS 낭독분). topK 미지정 시 이 값. */
+    private static final int DEFAULT_TOP_K = 5;
+
+    /** 기본 top-5 추천(프로덕션 경로). */
+    public RecommendResponse recommend(String text, Long storeId) {
+        return recommend(text, storeId, null);
+    }
 
     /**
      * 순수 임베딩 추천 — pgvector 코사인 유사도로만 정렬한다(사전·규칙 없이 의미 유사도만 사용 → 범용성 유지).
      * 패시지는 옵션 텍스트를 포함할 수 있고({@code embedding.include-options}), 점수는 0~1로 정규화해 반환한다.
+     *
+     * @param topK 반환 후보 개수. null/0 이하면 기본 5. recall@K 측정·펀넬 후보 입구 용도로 더 크게 줄 수 있다
+     *             (랭킹·정규화는 동일, 잘라내는 개수만 달라짐 → 측정과 프로덕션이 같은 순위를 본다).
      */
-    public RecommendResponse recommend(String text, Long storeId) {
+    public RecommendResponse recommend(String text, Long storeId, Integer topK) {
+        int limit = (topK == null || topK <= 0) ? DEFAULT_TOP_K : topK;
         // Step 1: 쿼리 임베딩 — isQuery=true (e5 계열은 쿼리/패시지 프리픽스 구분)
         float[] queryVec;
         try {
@@ -57,15 +68,15 @@ public class RecommendService {
         List<Long> menuIds = new ArrayList<>(similarityMap.keySet());
         List<Menu> menus = menuRepository.findByMenuIdsAndStoreId(menuIds, storeId);
 
-        // Step 5: 코사인 점수 정렬 → top-5 (점수는 0~1 정규화해 표시)
-        List<MenuRecommendation> recommendations = score(menus, similarityMap);
+        // Step 5: 코사인 점수 정렬 → top-K (점수는 0~1 정규화해 표시)
+        List<MenuRecommendation> recommendations = score(menus, similarityMap, limit);
 
         return recommendResponseConverter.toResponse(recommendations, buildTtsText(recommendations));
     }
 
     // 코사인 유사도로 정렬. min-max 정규화는 단조변환이라 순위는 코사인 원점수와 동일하며,
     // score 필드를 0~1 스케일로 보기 좋게 만들어 줄 뿐이다(평탄도 진단용 score 분리도 확인에도 사용).
-    private List<MenuRecommendation> score(List<Menu> menus, Map<Long, Double> similarityMap) {
+    private List<MenuRecommendation> score(List<Menu> menus, Map<Long, Double> similarityMap, int limit) {
         if (menus.isEmpty()) {
             return List.of();
         }
@@ -81,7 +92,7 @@ public class RecommendService {
                     return recommendResponseConverter.toRecommendation(menu, norm);
                 })
                 .sorted(Comparator.comparingDouble(MenuRecommendation::score).reversed())
-                .limit(5)
+                .limit(limit)
                 .toList();
     }
 

@@ -203,6 +203,104 @@ class FinalRecommend3WayEvaluationTest {
         printT1(results);
         printT2(results);
         printT3(results);
+        printT4Recall();
+    }
+
+    /**
+     * T4 단독 실행 — recall@K만 측정(임베딩 arm만 호출, LLM/룰 비호출 → 빠르고 비용 0).
+     * <pre>./gradlew test --tests "*FinalRecommend3WayEvaluationTest.recallAtK" -Dvoisk.storeId=1</pre>
+     */
+    @Test
+    void recallAtK() {
+        Assumptions.assumeTrue(serverUp,
+                "실서버(" + BASE_URL + ")가 떠 있지 않아 평가를 건너뜁니다. ./gradlew bootRun 후 다시 실행하세요.");
+        System.out.printf("%n[recall@K 단독] 서버 %s · storeId=%d · 메뉴 %d개 · 라벨케이스 %d개%n",
+                BASE_URL, STORE_ID, catalog.size(), (int) CASES.stream().filter(this::hasLabel).count());
+        printT4Recall();
+    }
+
+    // ── T4. 임베딩 recall@K (리트리버 성능) — top-5 메인 호출과 분리된 topK=100 별도 패스 ──────
+    //   Hit@5(T1)=임베딩을 "랭커"로 본 지표. recall@K(여기)=임베딩을 "리트리버"로 본 지표(넓은 K).
+    //   펀넬(검색→LLM)의 후보 입구 K를 정하는 곡선. T1/T2 수치는 건드리지 않는다(별도 호출).
+    private static final int RECALL_POOL = 100;
+    private static final int[] RECALL_KS = {1, 3, 5, 10, 20, 30, 50, 100};
+
+    private void printT4Recall() {
+        System.out.println();
+        System.out.println("── T4. 임베딩 recall@K (리트리버 성능, topK=" + RECALL_POOL + " 별도 패스) ───────────────");
+
+        List<Case> labeled = CASES.stream().filter(this::hasLabel).toList();
+        // 케이스별: 임베딩 랭크드 리스트에서 정답이 처음 등장한 순위(1-base, 없으면 -1)
+        List<Integer> goldRanks = new ArrayList<>();
+        for (Case c : labeled) {
+            MethodResult embed = callEmbedRanked(c.input(), RECALL_POOL);
+            goldRanks.add(firstGoldRank(embed, c));
+        }
+
+        long armOk = goldRanks.stream().filter(r -> r != Integer.MIN_VALUE).count();
+        if (armOk == 0) {
+            System.out.println("   (임베딩 arm N/A — recall 측정 불가)");
+            return;
+        }
+
+        System.out.println("┌────────┬──────────┬─────────────────────────────────────────┐");
+        System.out.println("│   K    │ recall@K │  (정답이 임베딩 top-K 안에 든 케이스 비율) │");
+        System.out.println("├────────┼──────────┼─────────────────────────────────────────┤");
+        int n = labeled.size();
+        double prev = -1;
+        for (int k : RECALL_KS) {
+            long hit = goldRanks.stream().filter(r -> r != Integer.MIN_VALUE && r >= 1 && r <= k).count();
+            double recall = pct(hit, n);
+            String bar = "█".repeat((int) Math.round(recall / 5));
+            String plateau = (prev >= 0 && recall - prev < 0.001) ? " ← 평탄" : "";
+            System.out.printf("│ %4d   │  %5.1f%%  │ %-39s │%n", k, recall, bar + plateau);
+            prev = recall;
+        }
+        System.out.println("└────────┴──────────┴─────────────────────────────────────────┘");
+
+        // 정답 최초 등장 순위 분포 — K 선정 보조 (펀넬 입구는 이 분포의 꼬리를 덮어야 함)
+        List<Integer> found = goldRanks.stream().filter(r -> r != Integer.MIN_VALUE && r >= 1).sorted().toList();
+        long miss = goldRanks.stream().filter(r -> r == -1).count();
+        if (!found.isEmpty()) {
+            System.out.printf("  정답 최초순위: 중앙값 %d · 최악 %d · pool(%d) 밖 miss %d건/%d%n",
+                    found.get(found.size() / 2), found.get(found.size() - 1), RECALL_POOL, miss, n);
+        }
+        System.out.println("  ※ recall@K = 정답이 임베딩 랭크드 top-K 안에 있는 비율(리트리버 ceiling). Hit@5(T1)와 다른 역할 지표.");
+        System.out.println("  ※ 평탄해지는 K가 펀넬 후보 입구 후보 — 규모(storeId)별로 본 테스트를 반복해 곡선 비교.");
+    }
+
+    /** 임베딩을 topK개까지 받아오는 전용 호출(recall 측정용). 메인 top-5 호출과 분리. */
+    private MethodResult callEmbedRanked(String input, int topK) {
+        long start = System.currentTimeMillis();
+        try {
+            String body = MAPPER.writeValueAsString(Map.of("text", input, "storeId", STORE_ID, "topK", topK));
+            String raw = client.post().uri("/api/recommend")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            long latency = System.currentTimeMillis() - start;
+            JsonNode recs = MAPPER.readTree(raw).path("recommendations");
+            List<Long> ids = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            for (JsonNode nd : recs) {
+                ids.add(nd.path("menuId").asLong());
+                names.add(nd.path("name").asText(""));
+            }
+            return new MethodResult(ids, names, List.of(), 0, 0, latency, true);
+        } catch (Exception e) {
+            return new MethodResult(List.of(), List.of(), List.of(), 0, 0, System.currentTimeMillis() - start, false);
+        }
+    }
+
+    /** 정답 menuId가 랭크드 리스트에서 처음 등장한 순위(1-base). arm 죽으면 MIN_VALUE, pool 안에 없으면 -1. */
+    private int firstGoldRank(MethodResult r, Case c) {
+        if (!r.available()) return Integer.MIN_VALUE;
+        Set<Long> relevant = resolve(c.relevant());
+        for (int i = 0; i < r.ids().size(); i++) {
+            if (relevant.contains(r.ids().get(i))) return i + 1;
+        }
+        return -1;
     }
 
     // ── 호출 (실패/서버다운 시 available=false) ──────────────────────────────────────
