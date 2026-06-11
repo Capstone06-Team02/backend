@@ -58,6 +58,7 @@ public class OrderService {
     private static final List<String> OPTION_REMOVE_KW = List.of("빼", "없이", "제외", "삭제", "안 넣", "넣지 마");
     private static final List<String> NO_OPTION_KW = List.of("없", "없어", "없어요", "없습니다", "안 해", "안할", "안 할", "괜찮", "확인");
     private static final Pattern QTY_DIGIT = Pattern.compile("(\\d+)\\s*(?:개|잔|인분|명)");
+    private static final Pattern QTY_KOREAN = Pattern.compile("(하나|한|둘|두|셋|세|넷|다섯)\\s*(?:개|잔|인분|명)");
     private static final Map<String, Integer> KO_QTY = Map.ofEntries(
             Map.entry("하나", 1),
             Map.entry("한", 1),
@@ -1340,6 +1341,8 @@ public class OrderService {
             Integer quantity = extracted.quantity() != null ? extracted.quantity() : extractQty(text);
             if (quantity != null && quantity > 0) {
                 session.setQuantity(quantity);
+            } else if (session.getMenu() != null) {
+                session.setQuantity(1);
             }
         }
     }
@@ -1391,10 +1394,9 @@ public class OrderService {
         if (matcher.find()) {
             return Integer.parseInt(matcher.group(1));
         }
-        for (Map.Entry<String, Integer> entry : KO_QTY.entrySet()) {
-            if (text.contains(entry.getKey())) {
-                return entry.getValue();
-            }
+        matcher = QTY_KOREAN.matcher(text);
+        if (matcher.find()) {
+            return KO_QTY.get(matcher.group(1));
         }
         return null;
     }
@@ -1442,13 +1444,15 @@ public class OrderService {
         if (optionName == null || optionName.isBlank()) {
             return "필수 옵션을 선택해주세요.";
         }
-        String defaultMessage = defaultOptionName(slot)
-                .map(defaultOption -> " 기본 " + defaultOption + "입니다.")
-                .orElse("");
+        Optional<String> defaultOptionName = defaultOptionName(slot);
         if (menuName != null && !menuName.isBlank()) {
-            return String.format("%s의 필수 옵션 %s를 선택해주세요.%s", menuName, optionName, defaultMessage);
+            return defaultOptionName
+                    .map(defaultOption -> String.format("%s의 %s 옵션 기본 %s에서 변경하시겠어요?", menuName, optionName, defaultOption))
+                    .orElseGet(() -> String.format("%s의 필수 옵션 %s를 선택해주세요.", menuName, optionName));
         }
-        return optionName + " 옵션을 선택해주세요." + defaultMessage;
+        return defaultOptionName
+                .map(defaultOption -> String.format("%s 옵션 기본 %s에서 변경하시겠어요?", optionName, defaultOption))
+                .orElse(optionName + " 옵션을 선택해주세요.");
     }
 
     private Optional<String> defaultOptionName(OptionSlot slot) {

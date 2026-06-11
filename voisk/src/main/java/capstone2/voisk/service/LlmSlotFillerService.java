@@ -51,7 +51,7 @@ public class LlmSlotFillerService {
             - 현재 주문 slot JSON에 없는 새 메뉴가 발화에 있으면 [메뉴 후보]에서만 고른다.
             - 후보에 없는 메뉴명/옵션명은 추측하지 말고 null로 둔다.
             - 옵션은 optionGroup 이름이 아니라 candidate 이름을 반환한다. 예: "디카페인", "벤티"
-            - previousBotResponse에 "기본 X입니다"가 있고 사용자 발화가 "그대로", "그대로 주세요", "기본으로", "기본으로 주세요"처럼 기본값 수락이면 option은 X로 반환한다.
+            - previousBotResponse에 "기본 X입니다" 또는 "기본 X에서"가 있고 사용자 발화가 "그대로", "그대로 주세요", "기본으로", "기본으로 주세요"처럼 기본값 수락이면 option은 X로 반환한다.
             - 수량은 숫자+개/잔/인분/명 또는 하나/두/세 같은 표현에서만 추출한다.
             - 긍정 답변은 CONFIRM, 거절/취소/다시 선택은 CANCEL, 판단이 어려우면 UNKNOWN.
             - orderDraft는 서버가 관리하므로 항상 null로 둔다.
