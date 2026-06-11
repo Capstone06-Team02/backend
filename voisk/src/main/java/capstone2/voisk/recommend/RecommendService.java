@@ -27,7 +27,8 @@ public class RecommendService {
 
     // pgvector는 storeId를 모르므로(menu_id·벡터만 보관) 전역 top-K를 뽑은 뒤 MySQL에서 매장 필터를 한다.
     // 여러 매장 임베딩이 한 테이블에 공존하면 K가 작을수록 매장 필터 후 후보가 부족해진다 → 넉넉히 둔다.
-    private static final int CANDIDATE_POOL_SIZE = 100;
+    // N=100 매장(store4) 측정 대응: 전체 매장 메뉴 합(10+30+50+100=190)을 덮도록 300으로 상향.
+    private static final int CANDIDATE_POOL_SIZE = 300;
     /** 반환 후보 기본 개수(프로덕션 TTS 낭독분). topK 미지정 시 이 값. */
     private static final int DEFAULT_TOP_K = 5;
 

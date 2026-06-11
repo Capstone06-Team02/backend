@@ -219,6 +219,126 @@ class FinalRecommend3WayEvaluationTest {
         printT4Recall();
     }
 
+    /**
+     * T5 — 펀넬(임베딩 top-K → LLM 재랭킹) vs LLM 단독 비교.
+     * 같은 케이스를 LLM 단독 / 펀넬 K=20 / 펀넬 K=30 에 던져 Hit@5·지연·토큰·비용을 나란히 잰다.
+     * 핵심 관찰: <b>후보수가 줄면 출력(thinking) 토큰·지연이 실제로 줄어드는가</b> + Hit@5는 유지되는가.
+     * <pre>./gradlew test --tests "*FinalRecommend3WayEvaluationTest.funnelVsLlm" -Dvoisk.storeId=3</pre>
+     */
+    @Test
+    void funnelVsLlm() {
+        Assumptions.assumeTrue(serverUp,
+                "실서버(" + BASE_URL + ")가 떠 있지 않아 평가를 건너뜁니다. ./gradlew bootRun 후 다시 실행하세요.");
+
+        List<Case> labeled = CASES.stream().filter(this::hasLabel).toList();
+        List<MethodResult> llm = new ArrayList<>();
+        List<MethodResult> f20 = new ArrayList<>();
+        List<MethodResult> f30 = new ArrayList<>();
+        List<Case> cs = new ArrayList<>();
+        for (Case c : labeled) {
+            llm.add(call("/api/recommend/llm", c.input()));
+            f20.add(call("/api/recommend/funnel", c.input(), 20));
+            f30.add(call("/api/recommend/funnel", c.input(), 30));
+            cs.add(c);
+        }
+
+        System.out.printf("%n── T5. 펀넬 vs LLM 단독 — storeId=%d · 메뉴 %d개 · 라벨케이스 %d개 ────────────%n",
+                STORE_ID, catalog.size(), labeled.size());
+        System.out.println("┌──────────────┬────────┬──────────┬──────────┬──────────┬───────────┐");
+        System.out.println("│ 방식         │ Hit@5  │ 지연 p50 │ 입력 tok │ 출력 tok │ 비용/호출 │");
+        System.out.println("├──────────────┼────────┼──────────┼──────────┼──────────┼───────────┤");
+        printFunnelRow("LLM 단독", cs, llm);
+        printFunnelRow("펀넬 K=20", cs, f20);
+        printFunnelRow("펀넬 K=30", cs, f30);
+        System.out.println("└──────────────┴────────┴──────────┴──────────┴──────────┴───────────┘");
+        System.out.println("  ※ 출력 tok = total−prompt (thinking 포함). 후보수 줄여 이게 줄면 = 펀넬 효과의 핵심 증거.");
+        System.out.printf("  ※ N=%d 기준: K≥N이면 펀넬은 no-op(LLM 단독과 동일). 실질 대비는 K<N 구간에서만.%n", catalog.size());
+    }
+
+    /**
+     * T6 — 펀넬 정확도-vs-K 스윕. x=K, y=Hit@5(+지연·토큰·비용)를 K값별로 찍어 <b>정확도 봉우리 K</b>를 그래프로 정한다.
+     * T1~T5와 동일한 37케이스·동일 채점(menuId 해석·Hit@5)·동일 서버/모델을 그대로 재사용 → 직접 비교 가능.
+     * <pre>./gradlew test --tests "*FinalRecommend3WayEvaluationTest.kSweep" -Dvoisk.storeId=3 --info</pre>
+     */
+    // 기본은 N≤50용. N=100 스윕은 -Dvoisk.sweepKs=10,20,30,40,50,60,75,100 로 덮어쓴다(봉우리 우측 이동 확인).
+    private static final int[] SWEEP_KS = parseSweepKs(System.getProperty("voisk.sweepKs", "5,10,15,20,25,30,40,50"));
+
+    private static int[] parseSweepKs(String csv) {
+        String[] parts = csv.split(",");
+        int[] ks = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) ks[i] = Integer.parseInt(parts[i].trim());
+        return ks;
+    }
+
+    @Test
+    void kSweep() {
+        Assumptions.assumeTrue(serverUp,
+                "실서버(" + BASE_URL + ")가 떠 있지 않아 평가를 건너뜁니다. ./gradlew bootRun 후 다시 실행하세요.");
+
+        List<Case> labeled = CASES.stream().filter(this::hasLabel).toList();
+        System.out.printf("%n── T6. 펀넬 정확도-vs-K 스윕 — storeId=%d · 메뉴 %d개 · 라벨케이스 %d개 ────────────%n",
+                STORE_ID, catalog.size(), labeled.size());
+        System.out.println("┌──────────────┬────────┬──────────┬──────────┬──────────┬───────────┐");
+        System.out.println("│ K (후보 수)  │ Hit@5  │ 지연 p50 │ 입력 tok │ 출력 tok │ 비용/호출 │");
+        System.out.println("├──────────────┼────────┼──────────┼──────────┼──────────┼───────────┤");
+        for (int k : SWEEP_KS) {
+            List<MethodResult> rs = new ArrayList<>();
+            for (Case c : labeled) {
+                rs.add(call("/api/recommend/funnel", c.input(), k));
+            }
+            printFunnelRow("K=" + k, labeled, rs);
+        }
+        System.out.println("└──────────────┴────────┴──────────┴──────────┴──────────┴───────────┘");
+        System.out.printf("  ※ x=K, y=Hit@5 → 정확도 봉우리 K를 그래프로 결정. K≥N(%d)이면 전체와 동일(LLM 단독 등가).%n", catalog.size());
+        System.out.println("  ※ T1~T5와 동일 케이스·채점·서버 → 같은 그래프에 얹어 비교 가능. 출력 tok=total−prompt(thinking 포함).");
+    }
+
+    /**
+     * T7 — 규모(N) 확장성: 각 매장에서 LLM 단독 vs 펀넬(K=25) 한 점씩. storeId=1/2/3/4(N=10/30/50/100) 반복.
+     * x=N 그래프(LLM단독 vs 펀넬)의 데이터 포인트를 만든다. T1~T6과 동일 케이스·채점.
+     * <pre>./gradlew test --tests "*FinalRecommend3WayEvaluationTest.scaling" -Dvoisk.storeId=4 --info</pre>
+     */
+    @Test
+    void scaling() {
+        Assumptions.assumeTrue(serverUp,
+                "실서버(" + BASE_URL + ")가 떠 있지 않아 평가를 건너뜁니다. ./gradlew bootRun 후 다시 실행하세요.");
+
+        List<Case> labeled = CASES.stream().filter(this::hasLabel).toList();
+        List<MethodResult> llm = new ArrayList<>();
+        List<MethodResult> f25 = new ArrayList<>();
+        for (Case c : labeled) {
+            llm.add(call("/api/recommend/llm", c.input()));
+            f25.add(call("/api/recommend/funnel", c.input(), 25));
+        }
+        System.out.printf("%n── T7. 확장성 포인트 — storeId=%d · N=%d · 라벨케이스 %d ────────────%n",
+                STORE_ID, catalog.size(), labeled.size());
+        System.out.println("┌──────────────┬────────┬──────────┬──────────┬──────────┬───────────┐");
+        System.out.println("│ 방식         │ Hit@5  │ 지연 p50 │ 입력 tok │ 출력 tok │ 비용/호출 │");
+        System.out.println("├──────────────┼────────┼──────────┼──────────┼──────────┼───────────┤");
+        printFunnelRow("LLM 단독", labeled, llm);
+        printFunnelRow("펀넬 K=25", labeled, f25);
+        System.out.println("└──────────────┴────────┴──────────┴──────────┴──────────┴───────────┘");
+        System.out.printf("  ※ N=%d. K=25≥N이면 펀넬=LLM단독(no-op). x=N으로 4매장(10/30/50/100) 묶어 확장성 그래프.%n", catalog.size());
+    }
+
+    private void printFunnelRow(String label, List<Case> cs, List<MethodResult> rs) {
+        List<MethodResult> ok = rs.stream().filter(MethodResult::available).toList();
+        if (ok.isEmpty()) {
+            System.out.printf("│ %-11s  │ %6s │ %8s │ %8s │ %8s │ %9s │%n", label, "N/A", "N/A", "N/A", "N/A", "N/A");
+            return;
+        }
+        int n = cs.size();
+        long hit = 0;
+        for (int i = 0; i < n; i++) if (hitAtK(rs.get(i), cs.get(i), 5)) hit++;
+        List<Long> lat = ok.stream().map(MethodResult::latencyMs).sorted().toList();
+        double avgIn = ok.stream().mapToInt(MethodResult::promptTokens).average().orElse(0);
+        double avgOut = ok.stream().mapToInt(MethodResult::billableOutputTokens).average().orElse(0);
+        // gemini-2.5-flash 단가(per 1M): 입력 $0.30 / 출력 $2.50 · ₩1380/$
+        double krw = (avgIn / 1_000_000 * 0.30 + avgOut / 1_000_000 * 2.50) * 1380;
+        System.out.printf("│ %-11s  │ %5.1f%% │ %7dms │ %8.0f │ %8.0f │ %8.2f₩ │%n",
+                label, pct(hit, n), percentile(lat, 50), avgIn, avgOut, krw);
+    }
+
     // ── T4. 임베딩 recall@K (리트리버 성능) — top-5 메인 호출과 분리된 topK=100 별도 패스 ──────
     //   Hit@5(T1)=임베딩을 "랭커"로 본 지표. recall@K(여기)=임베딩을 "리트리버"로 본 지표(넓은 K).
     //   펀넬(검색→LLM)의 후보 입구 K를 정하는 곡선. T1/T2 수치는 건드리지 않는다(별도 호출).
@@ -306,9 +426,17 @@ class FinalRecommend3WayEvaluationTest {
     // ── 호출 (실패/서버다운 시 available=false) ──────────────────────────────────────
 
     private MethodResult call(String url, String input) {
+        return call(url, input, null);
+    }
+
+    private MethodResult call(String url, String input, Integer topK) {
         long start = System.currentTimeMillis();
         try {
-            String body = MAPPER.writeValueAsString(Map.of("text", input, "storeId", STORE_ID));
+            Map<String, Object> bodyMap = new LinkedHashMap<>();
+            bodyMap.put("text", input);
+            bodyMap.put("storeId", STORE_ID);
+            if (topK != null) bodyMap.put("topK", topK);
+            String body = MAPPER.writeValueAsString(bodyMap);
             String raw = client.post().uri(url)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
