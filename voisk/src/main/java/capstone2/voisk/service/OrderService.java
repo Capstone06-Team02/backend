@@ -1435,16 +1435,28 @@ public class OrderService {
 
     private String requiredOptionPrompt(String menuName, List<OptionSlot> slots) {
         if (slots.isEmpty()) {
-            return "필수 옵션을 선택해 주세요.";
+            return "필수 옵션을 선택해주세요.";
         }
-        String optionName = slots.get(0).name();
+        OptionSlot slot = slots.get(0);
+        String optionName = slot.name();
         if (optionName == null || optionName.isBlank()) {
-            return "필수 옵션을 선택해 주세요.";
+            return "필수 옵션을 선택해주세요.";
         }
+        String defaultMessage = defaultOptionName(slot)
+                .map(defaultOption -> " 기본 " + defaultOption + "입니다.")
+                .orElse("");
         if (menuName != null && !menuName.isBlank()) {
-            return String.format("%s의 필수 옵션인 %s 옵션을 선택해 주세요.", menuName, optionName);
+            return String.format("%s의 필수 옵션 %s를 선택해주세요.%s", menuName, optionName, defaultMessage);
         }
-        return optionName + " 옵션을 선택해 주세요.";
+        return optionName + " 옵션을 선택해주세요." + defaultMessage;
+    }
+
+    private Optional<String> defaultOptionName(OptionSlot slot) {
+        return emptyIfNull(slot.candidates()).stream()
+                .filter(candidate -> Boolean.TRUE.equals(candidate.defaultSelected()))
+                .map(OptionSlot.OptionCandidate::name)
+                .filter(name -> name != null && !name.isBlank())
+                .findFirst();
     }
 
     private String optionalOptionListPrompt(List<MenuCacheResponse.OptionGroupInfo> optionalGroups) {
@@ -1627,6 +1639,7 @@ public class OrderService {
         List<OrderResponse.OrderItemSlot> orderItems = orderItemSlots(session, catalog);
         OrderResponse.PriceInfo priceInfo = calculatePrice(session, orderItems);
         boolean slotsComplete = requiredSlotsComplete(session, catalog);
+        session.setPreviousBotResponse(message);
         return orderResponseConverter().toResponse(
                 sid,
                 intent,
