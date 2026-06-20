@@ -49,6 +49,10 @@ public class Menu {
 
     @Builder.Default
     @OneToMany(mappedBy = "menu")
+    private List<MenuAlias> aliases = new ArrayList<>();
+
+    @Builder.Default
+    @OneToMany(mappedBy = "menu")
     private List<OptionGroup> optionGroups = new ArrayList<>();
 
     @Builder.Default

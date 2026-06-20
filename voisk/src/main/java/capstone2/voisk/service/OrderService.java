@@ -28,6 +28,7 @@ import capstone2.voisk.repository.OrderMenuRepository;
 import capstone2.voisk.repository.OrderSessionRepository;
 import capstone2.voisk.repository.StoreRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,11 +52,13 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class OrderService {
 
     private static final List<String> OPTION_REMOVE_KW = List.of("빼", "없이", "제외", "삭제", "안 넣", "넣지 마");
     private static final List<String> NO_OPTION_KW = List.of("없", "없어", "없어요", "없습니다", "안 해", "안할", "안 할", "괜찮", "확인");
     private static final Pattern QTY_DIGIT = Pattern.compile("(\\d+)\\s*(?:개|잔|인분|명)");
+    private static final Pattern QTY_KOREAN = Pattern.compile("(하나|한|둘|두|셋|세|넷|다섯)\\s*(?:개|잔|인분|명)");
     private static final Map<String, Integer> KO_QTY = Map.ofEntries(
             Map.entry("하나", 1),
             Map.entry("한", 1),
@@ -128,7 +131,12 @@ public class OrderService {
 
         String text = request.getInput() == null ? "" : request.getInput().trim();
         Optional<MenuCacheResponse> catalog = resolveCatalog(session);
+        Optional<OrderResponse> exactOptionResponse = handleExactOptionItemOnlyInput(sid, text, session, catalog);
+        if (exactOptionResponse.isPresent()) {
+            return exactOptionResponse.get();
+        }
         seedOrderDraftFromText(text, session, catalog);
+        log.info("[speak] route=LLM sessionId={} status={} input=\"{}\"", sid, session.getStatus(), text);
         SlotExtractionResult extracted = extractSlots(text, session, catalog);
         String intent = extracted.intent();
         String currentOptionText = optionAwareText(text, extracted);
@@ -410,6 +418,129 @@ public class OrderService {
             }
         }
         return Optional.empty();
+    }
+
+    private Optional<OrderResponse> handleExactOptionItemOnlyInput(
+            String sid,
+            String text,
+            OrderSession session,
+            Optional<MenuCacheResponse> catalog
+    ) {
+        if (session.getStatus() != OrderStatus.OPTION_FILLING
+                || hasPendingOptionConfirmation(session)
+                || text == null
+                || text.isBlank()) {
+            return Optional.empty();
+        }
+
+        Optional<MenuCacheResponse.MenuInfo> selectedMenu = findSelectedMenu(catalog, session);
+        if (selectedMenu.isEmpty()) {
+            return Optional.empty();
+        }
+
+        MenuCacheResponse.MenuInfo menu = selectedMenu.get();
+        Set<Long> selected = selectedOptionIds(session);
+        List<MenuCacheResponse.OptionGroupInfo> targetGroups = exactOptionTargetGroups(session, menu, selected);
+        Optional<OptionSelection> selection = findExactOptionSelection(text, targetGroups);
+        if (selection.isEmpty()) {
+            log.info(
+                    "[speak] route=OPTION_ITEM_EXACT_MISS sessionId={} input=\"{}\" menu=\"{}\" targetOptions={}",
+                    sid,
+                    text,
+                    menu.name(),
+                    exactOptionCandidates(targetGroups)
+            );
+            return Optional.empty();
+        }
+
+        OptionSelection selectedOption = selection.get();
+        log.info(
+                "[speak] route=OPTION_ITEM_EXACT sessionId={} input=\"{}\" menu=\"{}\" optionGroup=\"{}\" optionItem=\"{}\" matchedBy={}",
+                sid,
+                text,
+                menu.name(),
+                selectedOption.group().name(),
+                selectedOption.item().name(),
+                exactOptionMatchType(text, selectedOption.item())
+        );
+
+        applyConfirmedOptionSelection(session, menu, selectedOption.group(), selectedOption.item());
+        session.setPendingOptionalGroupId(null);
+        return Optional.of(continueAfterConfirmedOptionSelection(sid, "ORDER", session, menu));
+    }
+
+    private List<MenuCacheResponse.OptionGroupInfo> exactOptionTargetGroups(
+            OrderSession session,
+            MenuCacheResponse.MenuInfo menu,
+            Set<Long> selectedOptionIds
+    ) {
+        List<MenuCacheResponse.OptionGroupInfo> requiredGroups = requiredOptionGroups(menu, selectedOptionIds);
+        if (!requiredGroups.isEmpty()) {
+            return requiredGroups.stream().limit(1).toList();
+        }
+
+        List<MenuCacheResponse.OptionGroupInfo> optionalGroups = optionalOptionGroups(menu, selectedOptionIds);
+        return findPendingOptionalGroup(session, optionalGroups)
+                .map(List::of)
+                .orElse(optionalGroups);
+    }
+
+    private Optional<OptionSelection> findExactOptionSelection(
+            String text,
+            Collection<MenuCacheResponse.OptionGroupInfo> targetGroups
+    ) {
+        String normalizedText = normalize(text);
+        if (normalizedText.isBlank()) {
+            return Optional.empty();
+        }
+
+        List<OptionSelection> matches = new java.util.ArrayList<>();
+        for (MenuCacheResponse.OptionGroupInfo group : targetGroups) {
+            for (MenuCacheResponse.OptionItemInfo item : emptyIfNull(group.optionItems())) {
+                if (!Boolean.FALSE.equals(item.isAvailable())
+                        && optionItemExactlyMatchesText(normalizedText, item)) {
+                    matches.add(new OptionSelection(group, item));
+                }
+            }
+        }
+        return matches.size() == 1 ? Optional.of(matches.get(0)) : Optional.empty();
+    }
+
+    private String exactOptionCandidates(Collection<MenuCacheResponse.OptionGroupInfo> targetGroups) {
+        return targetGroups.stream()
+                .flatMap(group -> emptyIfNull(group.optionItems()).stream()
+                        .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
+                        .map(item -> String.format(
+                                "%s:%s aliases=[%s]",
+                                group.name(),
+                                item.name(),
+                                String.join(",", emptyIfNull(item.aliases()))
+                        )))
+                .limit(20)
+                .collect(Collectors.joining(" | "));
+    }
+
+    private boolean optionItemExactlyMatchesText(
+            String normalizedText,
+            MenuCacheResponse.OptionItemInfo item
+    ) {
+        String normalizedName = normalize(item.name());
+        if (!normalizedName.isBlank() && normalizedName.equals(normalizedText)) {
+            return true;
+        }
+        return emptyIfNull(item.aliases()).stream()
+                .map(this::normalize)
+                .filter(alias -> !alias.isBlank())
+                .anyMatch(normalizedText::equals);
+    }
+
+    private String exactOptionMatchType(String text, MenuCacheResponse.OptionItemInfo item) {
+        String normalizedText = normalize(text);
+        String normalizedName = normalize(item.name());
+        if (!normalizedName.isBlank() && normalizedName.equals(normalizedText)) {
+            return "ITEM_NAME";
+        }
+        return "ITEM_ALIAS";
     }
 
     private OrderResponse askOptionSelectionConfirmation(
@@ -734,6 +865,7 @@ public class OrderService {
         if (missingOption.isPresent()) {
             DraftMissingOption missing = missingOption.get();
             hydrateSessionFromDraftItem(session, missing.item(), catalog);
+            session.setStatus(OrderStatus.OPTION_FILLING);
             OptionSlot optionSlot = optionSlotConverter.toOptionSlot(
                     missing.optionGroup(),
                     selectedOptionIdsFromDraft(missing.item(), missing.menu())
@@ -905,16 +1037,16 @@ public class OrderService {
         String normalizedText = normalize(text);
         List<MatchedMenu> matches = catalog.stream()
                 .flatMap(response -> response.menus().stream())
-                .filter(menu -> menu.name() != null && !menu.name().isBlank())
-                .map(menu -> {
-                    String normalizedMenuName = normalize(menu.name());
-                    int start = normalizedText.indexOf(normalizedMenuName);
-                    return new MatchedMenu(menu, start, start + normalizedMenuName.length());
-                })
+                .flatMap(menu -> menuMatchTerms(menu).stream()
+                        .map(term -> {
+                            int start = normalizedText.indexOf(term.value());
+                            return new MatchedMenu(menu, start, start + term.value().length(), term.canonical());
+                        }))
                 .filter(match -> match.start() >= 0)
                 .sorted(Comparator
                         .comparingInt(MatchedMenu::start)
-                        .thenComparing(match -> match.end() - match.start(), Comparator.reverseOrder()))
+                        .thenComparing(match -> match.end() - match.start(), Comparator.reverseOrder())
+                        .thenComparing(MatchedMenu::canonical, Comparator.reverseOrder()))
                 .toList();
 
         List<MatchedMenu> nonOverlappingMatches = new java.util.ArrayList<>();
@@ -930,7 +1062,45 @@ public class OrderService {
                 .toList();
     }
 
-    private record MatchedMenu(MenuCacheResponse.MenuInfo menu, int start, int end) {
+    private List<MenuMatchTerm> menuMatchTerms(MenuCacheResponse.MenuInfo menu) {
+        List<MenuMatchTerm> terms = new java.util.ArrayList<>();
+        String normalizedName = normalize(menu.name());
+        if (!normalizedName.isBlank()) {
+            terms.add(new MenuMatchTerm(normalizedName, true));
+        }
+        emptyIfNull(menu.aliases()).stream()
+                .map(this::normalize)
+                .filter(alias -> !alias.isBlank())
+                .distinct()
+                .map(alias -> new MenuMatchTerm(alias, false))
+                .forEach(terms::add);
+        return terms.stream()
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toMap(
+                                MenuMatchTerm::value,
+                                term -> term,
+                                (left, right) -> left.canonical() ? left : right,
+                                java.util.LinkedHashMap::new
+                        ),
+                        map -> List.copyOf(map.values())
+                ));
+    }
+
+    private List<String> menuMatchTermValues(MenuCacheResponse.MenuInfo menu) {
+        return java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(menu.name()),
+                        emptyIfNull(menu.aliases()).stream()
+                )
+                .map(this::normalize)
+                .filter(term -> !term.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private record MenuMatchTerm(String value, boolean canonical) {
+    }
+
+    private record MatchedMenu(MenuCacheResponse.MenuInfo menu, int start, int end, boolean canonical) {
     }
 
     private boolean hasOptionSelection(String text, Optional<MenuCacheResponse> catalog, OrderSession session) {
@@ -1171,6 +1341,8 @@ public class OrderService {
             Integer quantity = extracted.quantity() != null ? extracted.quantity() : extractQty(text);
             if (quantity != null && quantity > 0) {
                 session.setQuantity(quantity);
+            } else if (session.getMenu() != null) {
+                session.setQuantity(1);
             }
         }
     }
@@ -1201,7 +1373,7 @@ public class OrderService {
         String normalizedMenuName = normalize(menuName);
         return catalog.stream()
                 .flatMap(response -> response.menus().stream())
-                .filter(menu -> normalize(menu.name()).equals(normalizedMenuName))
+                .filter(menu -> menuMatchTermValues(menu).stream().anyMatch(term -> term.equals(normalizedMenuName)))
                 .findFirst();
     }
 
@@ -1222,10 +1394,9 @@ public class OrderService {
         if (matcher.find()) {
             return Integer.parseInt(matcher.group(1));
         }
-        for (Map.Entry<String, Integer> entry : KO_QTY.entrySet()) {
-            if (text.contains(entry.getKey())) {
-                return entry.getValue();
-            }
+        matcher = QTY_KOREAN.matcher(text);
+        if (matcher.find()) {
+            return KO_QTY.get(matcher.group(1));
         }
         return null;
     }
@@ -1266,16 +1437,30 @@ public class OrderService {
 
     private String requiredOptionPrompt(String menuName, List<OptionSlot> slots) {
         if (slots.isEmpty()) {
-            return "필수 옵션을 선택해 주세요.";
+            return "필수 옵션을 선택해주세요.";
         }
-        String optionName = slots.get(0).name();
+        OptionSlot slot = slots.get(0);
+        String optionName = slot.name();
         if (optionName == null || optionName.isBlank()) {
-            return "필수 옵션을 선택해 주세요.";
+            return "필수 옵션을 선택해주세요.";
         }
+        Optional<String> defaultOptionName = defaultOptionName(slot);
         if (menuName != null && !menuName.isBlank()) {
-            return String.format("%s의 필수 옵션인 %s 옵션을 선택해 주세요.", menuName, optionName);
+            return defaultOptionName
+                    .map(defaultOption -> String.format("%s의 %s 옵션 기본 %s에서 변경하시겠어요?", menuName, optionName, defaultOption))
+                    .orElseGet(() -> String.format("%s의 필수 옵션 %s를 선택해주세요.", menuName, optionName));
         }
-        return optionName + " 옵션을 선택해 주세요.";
+        return defaultOptionName
+                .map(defaultOption -> String.format("%s 옵션 기본 %s에서 변경하시겠어요?", optionName, defaultOption))
+                .orElse(optionName + " 옵션을 선택해주세요.");
+    }
+
+    private Optional<String> defaultOptionName(OptionSlot slot) {
+        return emptyIfNull(slot.candidates()).stream()
+                .filter(candidate -> Boolean.TRUE.equals(candidate.defaultSelected()))
+                .map(OptionSlot.OptionCandidate::name)
+                .filter(name -> name != null && !name.isBlank())
+                .findFirst();
     }
 
     private String optionalOptionListPrompt(List<MenuCacheResponse.OptionGroupInfo> optionalGroups) {
@@ -1458,6 +1643,7 @@ public class OrderService {
         List<OrderResponse.OrderItemSlot> orderItems = orderItemSlots(session, catalog);
         OrderResponse.PriceInfo priceInfo = calculatePrice(session, orderItems);
         boolean slotsComplete = requiredSlotsComplete(session, catalog);
+        session.setPreviousBotResponse(message);
         return orderResponseConverter().toResponse(
                 sid,
                 intent,

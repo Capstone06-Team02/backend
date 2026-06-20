@@ -94,12 +94,16 @@ public class OrderSession {
     @Transient
     private String previousUtterance;
 
+    @Transient
+    private String previousBotResponse;
+
     public void reset() {
         resetCurrentItem();
         this.accumulatedTotalPrice = 0;
         this.pendingMenuItems = new ArrayDeque<>();
         this.orderDraft = null;
         this.previousUtterance = null;
+        this.previousBotResponse = null;
     }
 
     public void resetCurrentItem() {

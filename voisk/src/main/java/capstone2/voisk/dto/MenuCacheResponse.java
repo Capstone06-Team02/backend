@@ -14,6 +14,7 @@ public record MenuCacheResponse(
     public record MenuInfo(
             Long menuId,
             String name,
+            List<String> aliases,
             Integer price,
             String description,
             Boolean isAvailable,
