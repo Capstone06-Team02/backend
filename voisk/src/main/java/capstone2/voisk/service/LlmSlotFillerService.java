@@ -51,10 +51,8 @@ public class LlmSlotFillerService {
             - 현재 주문 slot JSON에 없는 새 메뉴가 발화에 있으면 [메뉴 후보]에서만 고른다.
             - 후보에 없는 메뉴명/옵션명은 추측하지 말고 null로 둔다.
             - 옵션은 optionGroup 이름이 아니라 candidate 이름을 반환한다. 예: "디카페인", "벤티"
-            - previousBotResponse에 "기본 X입니다" 또는 "기본 X에서"가 있고 사용자 발화가 "그대로", "그대로 주세요", "기본으로", "기본으로 주세요"처럼 기본값 수락이면 intent는 ORDER, option은 X로 반환한다.
-            - previousBotResponse가 "기본 X에서 변경하시겠어요?" 형태이고 사용자 발화가 "아니", "아니요", "변경 안 할게요", "괜찮아요"처럼 변경 거절이면 주문 취소가 아니라 기본값 유지이다. 이 경우 intent는 ORDER, option은 X로 반환한다.
             - 수량은 숫자+개/잔/인분/명 또는 하나/두/세 같은 표현에서만 추출한다.
-            - 긍정 답변은 CONFIRM, 거절/취소/다시 선택은 CANCEL, 판단이 어려우면 UNKNOWN. 단, 직전 봇 응답의 기본 옵션 변경 여부를 묻는 질문에 대한 거절은 CANCEL이 아니다.
+            - 긍정 답변은 CONFIRM, 거절/취소/다시 선택은 CANCEL, 판단이 어려우면 UNKNOWN.
             - orderDraft는 서버가 관리하므로 항상 null로 둔다.
             """;
 
@@ -132,7 +130,6 @@ public class LlmSlotFillerService {
                 selectedMenu: %s
                 quantity: %s
                 previousUtterance: %s
-                previousBotResponse: %s
 
                 [현재 주문 slot JSON]
                 %s
@@ -146,7 +143,6 @@ public class LlmSlotFillerService {
                 session == null ? null : session.getMenu(),
                 session == null ? null : session.getQuantity(),
                 session == null ? null : session.getPreviousUtterance(),
-                session == null ? null : session.getPreviousBotResponse(),
                 formatDraft(session, catalog),
                 formatMenuCandidateBlock(userInput, session, catalog),
                 userInput
@@ -205,6 +201,7 @@ public class LlmSlotFillerService {
                     candidateJson.put("defaultQuantity", item.defaultQuantity() == null ? 0 : item.defaultQuantity());
                     candidateJson.put("defaultSelected", isDefaultSelected(item));
                     candidateJson.put("selected", selectedOptionIds.contains(item.optionItemId()));
+                    candidateJson.put("aliases", emptyIfNull(item.aliases()));
                     return candidateJson;
                 })
                 .toList());
@@ -218,7 +215,7 @@ public class LlmSlotFillerService {
         return catalog.stream()
                 .flatMap(response -> response.menus().stream())
                 .filter(menu -> (item.menuId() != null && item.menuId().equals(menu.menuId()))
-                        || menuNameOrAliasEquals(menu, item.menuName()))
+                        || normalize(menu.name()).equals(normalize(item.menuName())))
                 .findFirst();
     }
 
@@ -270,29 +267,9 @@ public class LlmSlotFillerService {
         String candidates = catalog.stream()
                 .flatMap(response -> response.menus().stream())
                 .filter(menu -> !Boolean.FALSE.equals(menu.isAvailable()))
-                .map(menu -> {
-                    String aliases = emptyIfNull(menu.aliases()).stream()
-                            .filter(alias -> alias != null && !alias.isBlank())
-                            .collect(Collectors.joining(", "));
-                    return aliases.isBlank()
-                            ? "- " + menu.name()
-                            : "- " + menu.name() + " (aliases: " + aliases + ")";
-                })
+                .map(menu -> "- " + menu.name())
                 .collect(Collectors.joining("\n"));
         return "[메뉴 후보]\n" + (candidates.isBlank() ? "없음" : candidates);
-    }
-
-    private boolean menuNameOrAliasEquals(MenuCacheResponse.MenuInfo menu, String value) {
-        String normalizedValue = normalize(value);
-        if (normalizedValue.isBlank()) {
-            return false;
-        }
-        return java.util.stream.Stream.concat(
-                        java.util.stream.Stream.of(menu.name()),
-                        emptyIfNull(menu.aliases()).stream()
-                )
-                .map(this::normalize)
-                .anyMatch(normalizedValue::equals);
     }
 
     private boolean shouldIncludeMenuCandidates(String userInput, OrderSession session) {

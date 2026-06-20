@@ -12,11 +12,7 @@ import java.util.Set;
 public class OptionSlotConverter {
 
     public OptionSlot toOptionSlot(MenuCacheResponse.OptionGroupInfo group, Set<Long> selectedOptionIds) {
-        List<MenuCacheResponse.OptionItemInfo> availableItems = emptyIfNull(group.optionItems()).stream()
-                .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
-                .toList();
-        MenuCacheResponse.OptionItemInfo requiredDefaultOption = requiredDefaultOption(group, availableItems);
-        MenuCacheResponse.OptionItemInfo selectedOption = availableItems.stream()
+        MenuCacheResponse.OptionItemInfo selectedOption = emptyIfNull(group.optionItems()).stream()
                 .filter(item -> selectedOptionIds.contains(item.optionItemId()))
                 .findFirst()
                 .orElse(null);
@@ -25,41 +21,16 @@ public class OptionSlotConverter {
                 group.isRequired(),
                 selectedOption == null ? null : selectedOption.name(),
                 selectedOption == null ? null : isDefaultSelected(selectedOption),
-                availableItems.stream()
+                emptyIfNull(group.optionItems()).stream()
+                        .filter(item -> !Boolean.FALSE.equals(item.isAvailable()))
                         .map(item -> new OptionSlot.OptionCandidate(
                                 item.name(),
                                 item.extraPrice(),
-                                isCandidateDefault(group, item, requiredDefaultOption),
+                                isDefaultSelected(item),
                                 selectedOptionIds.contains(item.optionItemId())
                         ))
                         .toList()
         );
-    }
-
-    private MenuCacheResponse.OptionItemInfo requiredDefaultOption(
-            MenuCacheResponse.OptionGroupInfo group,
-            List<MenuCacheResponse.OptionItemInfo> availableItems
-    ) {
-        if (!Boolean.TRUE.equals(group.isRequired()) || availableItems.isEmpty()) {
-            return null;
-        }
-        return availableItems.stream()
-                .filter(this::isDefaultSelected)
-                .findFirst()
-                .orElse(availableItems.get(0));
-    }
-
-    private boolean isCandidateDefault(
-            MenuCacheResponse.OptionGroupInfo group,
-            MenuCacheResponse.OptionItemInfo item,
-            MenuCacheResponse.OptionItemInfo requiredDefaultOption
-    ) {
-        if (!Boolean.TRUE.equals(group.isRequired())) {
-            return isDefaultSelected(item);
-        }
-        return requiredDefaultOption != null
-                && item.optionItemId() != null
-                && item.optionItemId().equals(requiredDefaultOption.optionItemId());
     }
 
     private boolean isDefaultSelected(MenuCacheResponse.OptionItemInfo item) {

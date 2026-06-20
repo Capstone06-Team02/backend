@@ -3,7 +3,6 @@ package capstone2.voisk.converter;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.entity.Category;
 import capstone2.voisk.entity.Menu;
-import capstone2.voisk.entity.MenuAlias;
 import capstone2.voisk.entity.MenuOptionGroup;
 import capstone2.voisk.entity.MenuOptionItem;
 import capstone2.voisk.entity.OptionGroupTemplateAlias;
@@ -36,7 +35,6 @@ public class MenuCacheResponseConverter {
         return new MenuCacheResponse.MenuInfo(
                 menu.getMenuId(),
                 menu.getName(),
-                menuAliases(menu),
                 menu.getPrice(),
                 menu.getDescription(),
                 menu.getIsAvailable(),
@@ -92,15 +90,6 @@ public class MenuCacheResponseConverter {
                 optionItem.getMaxQuantity(),
                 optionItem.getIsDefault()
         );
-    }
-
-    private List<String> menuAliases(Menu menu) {
-        return emptyIfNull(menu.getAliases()).stream()
-                .map(MenuAlias::getAlias)
-                .filter(alias -> alias != null && !alias.isBlank())
-                .map(String::trim)
-                .distinct()
-                .toList();
     }
 
     private <T> Collection<T> emptyIfNull(Collection<T> values) {
