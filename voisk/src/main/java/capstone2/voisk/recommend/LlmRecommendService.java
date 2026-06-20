@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -69,18 +70,26 @@ public class LlmRecommendService {
     private final GeminiProperties geminiProperties;
     private final MenuRepository menuRepository;
 
+    /** LLM 단독 추천 — 매장 전체 판매중 메뉴를 후보로 LLM에 넘긴다. */
     @Transactional(readOnly = true)
     public LlmRecommendResponse recommend(String text, Long storeId) {
         if (storeId == null) {
             throw new IllegalArgumentException("storeId is required.");
         }
+        return recommendFromCandidates(text, menuRepository.findAvailableByStoreIdWithCategory(storeId));
+    }
 
-        List<Menu> candidates = menuRepository.findAvailableByStoreIdWithCategory(storeId);
+    /**
+     * 주어진 후보 메뉴 집합에 대해서만 LLM 재랭킹한다. 펀넬({@code FunnelRecommendService})이
+     * 임베딩으로 추린 top-K 후보를 그대로 넘길 때 쓰며, LLM 단독 경로와 검증·환각차단 로직을 100% 공유한다.
+     * 후보는 호출 전에 {@code category}까지 로드돼 있어야 한다(여기서 lazy 접근하지 않도록).
+     */
+    public LlmRecommendResponse recommendFromCandidates(String text, List<Menu> candidates) {
         if (candidates.isEmpty()) {
-            return new LlmRecommendResponse(List.of(), emptyTts());
+            return new LlmRecommendResponse(List.of(), emptyTts(), LlmRecommendResponse.TokenUsage.zero());
         }
 
-        List<Long> llmMenuIds = callGemini(text == null ? "" : text.trim(), candidates);
+        GeminiResult gemini = callGemini(text == null ? "" : text.trim(), candidates);
 
         // 출력 검증: 후보 집합에 실제로 존재하는 menuId만 통과시키고, DB 엔티티 값으로 결과를 구성한다.
         Map<Long, Menu> candidateById = candidates.stream()
@@ -88,7 +97,7 @@ public class LlmRecommendService {
 
         List<LlmMenuRecommendation> result = new ArrayList<>();
         Set<Long> seen = new LinkedHashSet<>();
-        for (Long id : llmMenuIds) {
+        for (Long id : gemini.ids()) {
             Menu menu = candidateById.get(id);
             if (menu == null || !seen.add(id)) {
                 continue; // 환각 id 또는 중복 폐기
@@ -100,56 +109,81 @@ public class LlmRecommendService {
             }
         }
 
-        return new LlmRecommendResponse(result, buildTtsText(result));
+        return new LlmRecommendResponse(result, buildTtsText(result), gemini.usage());
     }
 
-    /** Gemini를 호출해 추천 menuId 목록을 받는다. 실패 시 빈 목록(→ 빈 추천)으로 폴백. */
-    private List<Long> callGemini(String userInput, List<Menu> candidates) {
-        try {
-            Map<String, Object> systemInstruction = Map.of(
-                    "parts", List.of(Map.of("text", SYSTEM_PROMPT))
-            );
-            Map<String, Object> userContent = Map.of(
-                    "role", "user",
-                    "parts", List.of(Map.of("text", buildPromptInput(userInput, candidates)))
-            );
-            Map<String, Object> generationConfig = Map.of(
-                    "temperature", 0,
-                    "responseMimeType", "application/json"
-            );
-            Map<String, Object> body = Map.of(
-                    "system_instruction", systemInstruction,
-                    "contents", List.of(userContent),
-                    "generationConfig", generationConfig
-            );
+    /** callGemini 반환 묶음: 추천 menuId 목록 + 이번 호출 토큰 사용량. */
+    private record GeminiResult(List<Long> ids, LlmRecommendResponse.TokenUsage usage) {}
 
-            String raw = geminiRestClient.post()
-                    .uri("/v1beta/models/{model}:generateContent", geminiProperties.getModel())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
+    /** 일시적 오류(과부하·레이트리밋)에 대한 재시도 횟수. 이슈 #11(재시도 부재) 대응. */
+    private static final int MAX_ATTEMPTS = 4;
 
-            JsonNode root = MAPPER.readTree(raw);
-            String content = root.path("candidates").get(0)
-                    .path("content").path("parts").get(0)
-                    .path("text").asText();
-            JsonNode parsed = MAPPER.readTree(content);
+    /**
+     * Gemini를 호출해 추천 menuId 목록과 토큰 사용량을 받는다.
+     * <p>503(UNAVAILABLE)·429(레이트리밋)는 일시적이므로 지수적 backoff로 최대 {@value #MAX_ATTEMPTS}회 재시도한다.
+     * 그 외 오류이거나 재시도 소진 시 빈 목록·0 토큰으로 폴백(graceful degradation).
+     */
+    private GeminiResult callGemini(String userInput, List<Menu> candidates) {
+        Map<String, Object> body = Map.of(
+                "system_instruction", Map.of("parts", List.of(Map.of("text", SYSTEM_PROMPT))),
+                "contents", List.of(Map.of(
+                        "role", "user",
+                        "parts", List.of(Map.of("text", buildPromptInput(userInput, candidates))))),
+                "generationConfig", Map.of("temperature", 0, "responseMimeType", "application/json")
+        );
 
-            List<Long> ids = new ArrayList<>();
-            JsonNode menuIds = parsed.path("menuIds");
-            if (menuIds.isArray()) {
-                for (JsonNode node : menuIds) {
-                    if (node.canConvertToLong()) {
-                        ids.add(node.asLong());
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                String raw = geminiRestClient.post()
+                        .uri("/v1beta/models/{model}:generateContent", geminiProperties.getModel())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body)
+                        .retrieve()
+                        .body(String.class);
+
+                JsonNode root = MAPPER.readTree(raw);
+                String content = root.path("candidates").get(0)
+                        .path("content").path("parts").get(0)
+                        .path("text").asText();
+                JsonNode parsed = MAPPER.readTree(content);
+
+                List<Long> ids = new ArrayList<>();
+                JsonNode menuIds = parsed.path("menuIds");
+                if (menuIds.isArray()) {
+                    for (JsonNode node : menuIds) {
+                        if (node.canConvertToLong()) {
+                            ids.add(node.asLong());
+                        }
                     }
                 }
+
+                // 비용 측정용 토큰 사용량 (Gemini usageMetadata)
+                JsonNode usage = root.path("usageMetadata");
+                LlmRecommendResponse.TokenUsage tokenUsage = new LlmRecommendResponse.TokenUsage(
+                        usage.path("promptTokenCount").asInt(0),
+                        usage.path("candidatesTokenCount").asInt(0),
+                        usage.path("totalTokenCount").asInt(0));
+                return new GeminiResult(ids, tokenUsage);
+            } catch (RestClientResponseException e) {
+                int sc = e.getStatusCode().value();
+                if ((sc == 503 || sc == 429) && attempt < MAX_ATTEMPTS) {
+                    log.warn("[Gemini] {} (시도 {}/{}) → backoff 후 재시도", sc, attempt, MAX_ATTEMPTS);
+                    try {
+                        Thread.sleep(600L * attempt);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                } else {
+                    log.error("[Gemini] 추천 실패 - input: \"{}\", error: {}", userInput, e.getMessage());
+                    return new GeminiResult(List.of(), LlmRecommendResponse.TokenUsage.zero());
+                }
+            } catch (Exception e) {
+                log.error("[Gemini] 추천 실패 - input: \"{}\", error: {}", userInput, e.getMessage());
+                return new GeminiResult(List.of(), LlmRecommendResponse.TokenUsage.zero());
             }
-            return ids;
-        } catch (Exception e) {
-            log.error("[Gemini] 추천 실패 - input: \"{}\", error: {}", userInput, e.getMessage());
-            return List.of();
         }
+        return new GeminiResult(List.of(), LlmRecommendResponse.TokenUsage.zero());
     }
 
     private String buildPromptInput(String userInput, List<Menu> candidates) {

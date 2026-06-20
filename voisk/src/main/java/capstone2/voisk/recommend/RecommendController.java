@@ -21,14 +21,25 @@ public class RecommendController {
     private final RecommendHintService recommendHintService;
     private final RuleRecommendService ruleRecommendService;
     private final LlmRecommendService llmRecommendService;
+    private final FunnelRecommendService funnelRecommendService;
 
     @Operation(
-            summary = "추천 요청 직접 입력",
-            description = "사용자가 직접 입력한 텍스트를 임베딩 모델로 분석해 유사한 메뉴를 최대 5개 추천합니다."
+            summary = "추천 요청 직접 입력 (채택 방식: 펀넬)",
+            description = "프론트가 호출하는 메인 추천 엔드포인트. 채택된 하이브리드 펀넬 방식(임베딩 검색 → LLM 재랭킹)으로 "
+                    + "동작합니다. 임베딩으로 후보를 topK개로 추린 뒤 그 후보만 LLM에 넘겨 재랭킹합니다. topK 미지정 시 기본 20."
     )
     @PostMapping("/recommend")
-    public RecommendResponse recommend(@RequestBody RecommendRequest request) {
-        return recommendService.recommend(request.text(), request.storeId());
+    public LlmRecommendResponse recommend(@RequestBody RecommendRequest request) {
+        return funnelRecommendService.recommend(request.text(), request.storeId(), request.topK());
+    }
+
+    @Operation(
+            summary = "임베딩 추천 요청 직접 입력",
+            description = "사용자가 직접 입력한 텍스트를 임베딩 모델로 분석해 유사한 메뉴를 최대 5개 추천합니다. (비교용 방식)"
+    )
+    @PostMapping("/recommend/embedded")
+    public RecommendResponse recommendByEmbedding(@RequestBody RecommendRequest request) {
+        return recommendService.recommend(request.text(), request.storeId(), request.topK());
     }
 
     @Operation(
@@ -49,6 +60,16 @@ public class RecommendController {
     @PostMapping("/recommend/llm")
     public LlmRecommendResponse recommendByLlm(@RequestBody RecommendRequest request) {
         return llmRecommendService.recommend(request.text(), request.storeId());
+    }
+
+    @Operation(
+            summary = "하이브리드 펀넬 추천 (임베딩 검색 → LLM 재랭킹)",
+            description = "임베딩으로 후보를 topK개로 추린 뒤 그 후보만 LLM에 넘겨 재랭킹합니다. 전체 메뉴를 LLM에 넣는 "
+                    + "LLM 단독 방식 대비 입력·thinking 토큰을 K로 묶어 비용·지연을 억제합니다. topK 미지정 시 기본 20."
+    )
+    @PostMapping("/recommend/funnel")
+    public LlmRecommendResponse recommendByFunnel(@RequestBody RecommendRequest request) {
+        return funnelRecommendService.recommend(request.text(), request.storeId(), request.topK());
     }
 
     @Operation(

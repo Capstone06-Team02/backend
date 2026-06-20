@@ -24,6 +24,20 @@ public interface MenuOptionGroupRepository extends JpaRepository<MenuOptionGroup
             """)
     List<MenuOptionGroup> findTopLevelOptionalGroupsByMenuId(@Param("menuId") Long menuId);
 
+    // 추천 패시지용 — 필수/선택 구분 없이 최상위 옵션 그룹+항목명을 로드 (온도/사이즈 등 필수 옵션도 포함)
+    @Query("""
+            SELECT DISTINCT g
+            FROM MenuOptionGroup g
+            JOIN FETCH g.optionGroupTemplate
+            LEFT JOIN FETCH g.optionItems i
+            LEFT JOIN FETCH i.optionItemTemplate
+            WHERE g.menu.menuId = :menuId
+              AND (g.isAvailable IS NULL OR g.isAvailable = true)
+              AND g.parentMenuOptionItem IS NULL
+            ORDER BY g.sortOrder ASC, g.id ASC, i.sortOrder ASC, i.id ASC
+            """)
+    List<MenuOptionGroup> findTopLevelGroupsByMenuId(@Param("menuId") Long menuId);
+
     @Query("""
             SELECT DISTINCT g
             FROM MenuOptionGroup g
