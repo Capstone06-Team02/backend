@@ -40,6 +40,7 @@ public class MenuCacheResponseConverter {
                 menu.getPrice(),
                 menu.getDescription(),
                 menu.getIsAvailable(),
+                menu.getIsSignature(),
                 toCategoryInfo(menu.getCategory()),
                 emptyIfNull(menu.getMenuOptionGroups()).stream()
                         .sorted((left, right) -> compareSortOrder(left.getSortOrder(), right.getSortOrder()))

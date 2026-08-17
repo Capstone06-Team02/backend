@@ -18,6 +18,7 @@ public record MenuCacheResponse(
             Integer price,
             String description,
             Boolean isAvailable,
+            Boolean isSignature,
             CategoryInfo category,
             List<OptionGroupInfo> optionGroups
     ) {

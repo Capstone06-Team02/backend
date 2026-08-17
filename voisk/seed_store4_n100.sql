@@ -11,8 +11,8 @@ SET @c_noncoffee = (SELECT category_id FROM category WHERE store_id=4 AND name='
 SET @c_dessert   = (SELECT category_id FROM category WHERE store_id=4 AND name='디저트');
 
 -- store3의 50개(앵커10+필러40)를 카테고리명 기준으로 매핑해 복사
-INSERT INTO menu (store_id, category_id, name, description, price, is_available)
-SELECT 4, c4.category_id, m.name, m.description, m.price, m.is_available
+INSERT INTO menu (store_id, category_id, name, description, price, is_available, is_signature)
+SELECT 4, c4.category_id, m.name, m.description, m.price, m.is_available, COALESCE(m.is_signature, b'0')
 FROM menu m
 JOIN category c3 ON m.category_id = c3.category_id AND c3.store_id = 3
 JOIN category c4 ON c4.store_id = 4 AND c4.name = c3.name
