@@ -2,6 +2,7 @@ package capstone2.voisk.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,6 +31,11 @@ public class Menu {
 
     @Column(name = "is_available")
     private Boolean isAvailable;
+
+    @Builder.Default
+    @Column(name = "is_signature", nullable = false)
+    @ColumnDefault("false")
+    private Boolean isSignature = false;
 
     // read-only 스칼라 — store @ManyToOne이 column 소유
     @Column(name = "store_id", insertable = false, updatable = false)

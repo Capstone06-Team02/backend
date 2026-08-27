@@ -10,9 +10,11 @@ import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.RequiredOptionSummaryRequest;
 import capstone2.voisk.dto.RequiredOptionSummaryResponse;
+import capstone2.voisk.dto.SignatureMenuListResponse;
 import capstone2.voisk.service.OrderOptionSelectionService;
 import capstone2.voisk.service.OrderService;
 import capstone2.voisk.service.RequiredOptionSummaryService;
+import capstone2.voisk.service.SignatureMenuService;
 import capstone2.voisk.service.StoreMenuCacheService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -37,6 +39,7 @@ public class OrderController {
     private final OrderOptionSelectionService orderOptionSelectionService;
     private final RequiredOptionSummaryService requiredOptionSummaryService;
     private final StoreMenuCacheService storeMenuCacheService;
+    private final SignatureMenuService signatureMenuService;
 
     @Operation(
             summary = "주문 대화 처리",
@@ -103,5 +106,14 @@ public class OrderController {
     @PostMapping({"/restaurants/{restaurantId}/menus/cache", "/stores/{restaurantId}/menus/cache"})
     public ResponseEntity<MenuCacheResponse> cacheMenus(@PathVariable Long restaurantId) {
         return ResponseEntity.ok(storeMenuCacheService.cacheMenus(restaurantId));
+    }
+
+    @Operation(
+            summary = "매장 시그니처 메뉴 목록 조회",
+            description = "매장 ID를 받아 해당 매장의 시그니처 메뉴 목록을 반환합니다."
+    )
+    @GetMapping({"/restaurants/{restaurantId}/menus/signatures", "/stores/{restaurantId}/menus/signatures"})
+    public ResponseEntity<SignatureMenuListResponse> getSignatureMenus(@PathVariable Long restaurantId) {
+        return ResponseEntity.ok(signatureMenuService.getSignatureMenus(restaurantId));
     }
 }
