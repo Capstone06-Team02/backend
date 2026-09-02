@@ -193,7 +193,7 @@ class FinalRecommend3WayEvaluationTest {
 
         List<CaseResult> results = new ArrayList<>();
         for (Case c : CASES) {
-            MethodResult embed = call("/api/recommend", c.input());
+            MethodResult embed = call("/api/recommend/embedded", c.input());
             MethodResult rule = call("/api/recommend/rule", c.input());
             MethodResult llm = call("/api/recommend/llm", c.input());
             results.add(new CaseResult(c, embed, rule, llm));
@@ -394,7 +394,7 @@ class FinalRecommend3WayEvaluationTest {
         long start = System.currentTimeMillis();
         try {
             String body = MAPPER.writeValueAsString(Map.of("text", input, "storeId", STORE_ID, "topK", topK));
-            String raw = client.post().uri("/api/recommend")
+            String raw = client.post().uri("/api/recommend/embedded")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .retrieve()

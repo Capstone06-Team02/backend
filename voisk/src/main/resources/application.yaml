@@ -34,6 +34,7 @@ embed:
 # true로 바꾸고 재기동하면 embedding_source 태그가 달라져 자동으로 재임베딩된다.
 embedding:
   include-options: ${EMBED_INCLUDE_OPTIONS:false}
+  initialize-on-startup: ${EMBED_INITIALIZE_ON_STARTUP:true}
 
 gemini:
   api-key: ${GEMINI_API_KEY}
