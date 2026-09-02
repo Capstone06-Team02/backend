@@ -7,6 +7,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("error", "요청한 리소스를 찾을 수 없습니다."));
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>> handleResponseStatus(
+            ResponseStatusException e,
+            HttpServletRequest request
+    ) {
+        log.warn("[GlobalExceptionHandler] {} {}, status: {}, cause: {}",
+                request.getMethod(), request.getRequestURI(), e.getStatusCode(), e.getReason());
+        String message = e.getReason() == null || e.getReason().isBlank()
+                ? "요청을 처리하지 못했습니다."
+                : e.getReason();
+        return ResponseEntity.status(e.getStatusCode())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", message));
     }
 
     @ExceptionHandler(Exception.class)

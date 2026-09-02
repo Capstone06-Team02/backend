@@ -38,6 +38,7 @@ embedding:
 gemini:
   api-key: ${GEMINI_API_KEY}
   model: gemini-2.5-flash
+  recommendation-read-timeout-seconds: ${GEMINI_RECOMMEND_READ_TIMEOUT_SECONDS:12}
 
 springdoc:
   swagger-ui:

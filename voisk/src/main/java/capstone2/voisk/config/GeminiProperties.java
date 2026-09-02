@@ -10,4 +10,5 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class GeminiProperties {
     private String apiKey;
     private String model;
+    private int recommendationReadTimeoutSeconds = 12;
 }
