@@ -26,7 +26,8 @@ public class RecommendController {
     @Operation(
             summary = "추천 요청 직접 입력 (채택 방식: 펀넬)",
             description = "프론트가 호출하는 메인 추천 엔드포인트. 채택된 하이브리드 펀넬 방식(임베딩 검색 → LLM 재랭킹)으로 "
-                    + "동작합니다. 임베딩으로 후보를 topK개로 추린 뒤 그 후보만 LLM에 넘겨 재랭킹합니다. topK 미지정 시 기본 20."
+                    + "동작합니다. 임베딩으로 후보를 topK개로 추린 뒤 그 후보만 LLM에 넘겨 재랭킹하고, "
+                    + "LLM이 구조화한 메뉴 기본 가격 조건과 현재 판매 상태를 DB에서 최종 검증합니다. topK 미지정 시 기본 20."
     )
     @PostMapping("/recommend")
     public LlmRecommendResponse recommend(@RequestBody RecommendRequest request) {
@@ -55,7 +56,8 @@ public class RecommendController {
     @Operation(
             summary = "LLM 추천 요청 직접 입력",
             description = "사용자 발화를 Gemini에 보내 메뉴를 최대 3개 추천합니다. 해당 매장의 판매중 메뉴만 후보로 제공하고, "
-                    + "LLM이 고른 menuId를 DB 후보와 대조 검증해 환각을 차단합니다. 이름·가격·카테고리는 DB 원본값으로 채웁니다."
+                    + "LLM이 구조화한 메뉴 기본 가격 조건과 고른 menuId를 최신 DB 상태에 대조해 검증합니다. "
+                    + "이름·가격·카테고리는 DB 원본값으로 채웁니다."
     )
     @PostMapping("/recommend/llm")
     public LlmRecommendResponse recommendByLlm(@RequestBody RecommendRequest request) {
@@ -65,7 +67,8 @@ public class RecommendController {
     @Operation(
             summary = "하이브리드 펀넬 추천 (임베딩 검색 → LLM 재랭킹)",
             description = "임베딩으로 후보를 topK개로 추린 뒤 그 후보만 LLM에 넘겨 재랭킹합니다. 전체 메뉴를 LLM에 넣는 "
-                    + "LLM 단독 방식 대비 입력·thinking 토큰을 K로 묶어 비용·지연을 억제합니다. topK 미지정 시 기본 20."
+                    + "LLM 단독 방식 대비 입력·thinking 토큰을 K로 묶어 비용·지연을 억제하고, 기본 가격과 판매 상태를 "
+                    + "DB에서 최종 검증합니다. topK 미지정 시 기본 20."
     )
     @PostMapping("/recommend/funnel")
     public LlmRecommendResponse recommendByFunnel(@RequestBody RecommendRequest request) {
