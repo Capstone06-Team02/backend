@@ -15,7 +15,6 @@ public class EmbeddingTextBuilder {
      */
     public static String buildPassageText(String menuName, String description, String categoryName, int price,
                                           String optionText) {
-        String model = System.getenv().getOrDefault("EMBED_MODEL", "e5-base");
         boolean hasDescription = description != null && !description.isBlank();
         boolean hasOptions = optionText != null && !optionText.isBlank();
 
@@ -25,12 +24,8 @@ public class EmbeddingTextBuilder {
             return String.format("%s (카테고리=%s / 가격=%d원%s)", menuName, categoryName, price, optionSuffix);
         }
 
-        return switch (model) {
-            // e5 계열은 패시지 임베딩 시 "passage: " 프리픽스 필요
-            case "e5-base" -> String.format("passage: %s — %s (카테고리=%s / 가격=%d원%s)",
-                    menuName, description, categoryName, price, optionSuffix);
-            default -> String.format("%s — %s (카테고리=%s / 가격=%d원%s)",
-                    menuName, description, categoryName, price, optionSuffix);
-        };
+        // 모델별 query:/passage: 접두사는 임베딩 서버에서 한 번만 붙인다.
+        return String.format("%s — %s (카테고리=%s / 가격=%d원%s)",
+                menuName, description, categoryName, price, optionSuffix);
     }
 }
