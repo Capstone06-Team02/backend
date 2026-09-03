@@ -3,6 +3,7 @@ package capstone2.voisk.config;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
@@ -14,12 +15,29 @@ import java.time.Duration;
 public class GeminiConfig {
 
     @Bean
+    @Primary
     public RestClient geminiRestClient(GeminiProperties props) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
         JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(Duration.ofSeconds(15));
+
+        return RestClient.builder()
+                .baseUrl("https://generativelanguage.googleapis.com")
+                .defaultHeader("x-goog-api-key", props.getApiKey())
+                .requestFactory(factory)
+                .build();
+    }
+
+    @Bean("recommendGeminiRestClient")
+    public RestClient recommendGeminiRestClient(GeminiProperties props) {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(3))
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
+        int readTimeoutSeconds = Math.max(1, props.getRecommendationReadTimeoutSeconds());
+        factory.setReadTimeout(Duration.ofSeconds(readTimeoutSeconds));
 
         return RestClient.builder()
                 .baseUrl("https://generativelanguage.googleapis.com")

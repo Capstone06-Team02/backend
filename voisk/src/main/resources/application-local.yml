@@ -10,6 +10,11 @@ spring:
       username: ${POSTGRES_USERNAME:admin}
       password: ${POSTGRES_PASSWORD:1234}
       driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      # 로컬 데이터 보존이 기본입니다. 스키마를 초기화해야 할 때만
+      # MYSQL_DDL_AUTO=create를 명시해서 실행합니다.
+      ddl-auto: ${MYSQL_DDL_AUTO:update}
 
 embed:
   server:

@@ -18,6 +18,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class MenuEmbeddingService {
 
+    /** 패시지 문자열 형식 변경 시 올려 기존 벡터를 자동 재생성한다. */
+    private static final String PASSAGE_FORMAT_VERSION = "text-v2";
+
     private final EmbedClient embedClient;
     private final MenuEmbeddingRepository menuEmbeddingRepository;
     private final MenuOptionGroupRepository menuOptionGroupRepository;
@@ -55,12 +58,13 @@ public class MenuEmbeddingService {
     }
 
     /**
-     * 현재 패시지 구성을 식별하는 태그. 모델명에 옵션 포함 시 {@code +opt}를 붙인다.
+     * 현재 패시지 구성을 식별하는 태그. 모델·옵션 포함 여부·텍스트 형식 버전을 조합한다.
      * 이 값이 저장된 {@code embedding_source}와 다르면 재임베딩 대상이다.
      */
     public String currentSourceTag() {
         String model = System.getenv().getOrDefault("EMBED_MODEL", "e5-base");
-        return includeOptions ? model + "+opt" : model;
+        String optionTag = includeOptions ? "+opt" : "";
+        return model + optionTag + "+" + PASSAGE_FORMAT_VERSION;
     }
 
     // 옵션 그룹/항목명을 "온도:핫·아이스, 사이즈:S·M·L" 형태로 직렬화. extraPrice·중복은 제외(잡음 최소화).

@@ -65,9 +65,9 @@ public class RecommendService {
                         r -> ((Number) r[1]).doubleValue()
                 ));
 
-        // Step 4: MySQL 조회 + storeId 필터 (다른 매장 메뉴 제거)
+        // Step 4: MySQL 조회 + storeId·판매 가능 여부 필터 (다른 매장·품절 메뉴 제거)
         List<Long> menuIds = new ArrayList<>(similarityMap.keySet());
-        List<Menu> menus = menuRepository.findByMenuIdsAndStoreId(menuIds, storeId);
+        List<Menu> menus = menuRepository.findAvailableByMenuIdsAndStoreId(menuIds, storeId);
 
         // Step 5: 코사인 점수 정렬 → top-K (점수는 0~1 정규화해 표시)
         List<MenuRecommendation> recommendations = score(menus, similarityMap, limit);
