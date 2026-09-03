@@ -32,7 +32,7 @@ public class LlmRecommendService {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private static final String SYSTEM_PROMPT = """
+    static final String SYSTEM_PROMPT = """
             너는 카페 메뉴 추천 도우미다. 사용자 발화를 읽고 아래 [후보 메뉴] 중에서 가장 적합한 메뉴를 골라 추천한다.
             가격은 옵션 추가금을 제외하고 후보에 표시된 메뉴 기본 가격만 사용한다.
 
@@ -46,6 +46,9 @@ public class LlmRecommendService {
             - "저렴한", "가성비 좋은", "5천 원 정도", "5천 원 안팎"은 임의의 하드 가격 경계로 바꾸지 않는다.
             - 가격 수치 조건이 없으면 minPrice와 maxPrice는 반드시 null이다.
             - "커피 말고", "달지 않은" 같은 부정/제외 표현을 반영해 해당 메뉴를 제외한다.
+            - 사용자가 제시한 맛, 재료, 카페인, 온도, 상황, 부정/제외 조건은 모두 동시에 만족해야 한다.
+            - 일부 조건만 만족하는 메뉴는 대체 후보로 넣지 않는다.
+            - 상큼함(과일·시트러스의 산미), 상쾌함(민트·허브 향), 청량함(탄산감), 시원함(차가운 온도)은 서로 다른 특성으로 구분하며 대신 충족한 것으로 판단하지 않는다.
             - rankedMenuIds에는 추출한 가격 조건까지 만족하는 후보만 적합한 순서로 최대 10개까지 넣는다.
             - 중복 ID를 넣거나 개수를 채우기 위해 부적합한 메뉴를 넣지 않는다.
             - 적합한 메뉴가 하나도 없으면 rankedMenuIds를 빈 배열로 반환한다.
