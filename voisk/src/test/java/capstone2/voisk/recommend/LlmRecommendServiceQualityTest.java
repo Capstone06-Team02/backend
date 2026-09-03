@@ -20,6 +20,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -150,6 +151,68 @@ class LlmRecommendServiceQualityTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode().value())
                         .isEqualTo(503));
+        server.verify();
+    }
+
+    @Test
+    void 추천_요청은_추론_예산을_512로_제한한다() throws Exception {
+        server.expect(requestTo("http://localhost/v1beta/models/test-model:generateContent"))
+                .andExpect(content().json("""
+                        {
+                          "generationConfig": {
+                            "thinkingConfig": {
+                              "thinkingBudget": 512
+                            }
+                          }
+                        }
+                        """, false))
+                .andRespond(withSuccess(
+                        geminiEnvelope(decisionJson(null, true, List.of())),
+                        org.springframework.http.MediaType.APPLICATION_JSON
+                ));
+
+        service.recommendFromCandidates(
+                "추천해줘", STORE_ID, List.of(menu(1L, "메뉴", 4500))
+        );
+
+        server.verify();
+    }
+
+    @Test
+    void 추천_추론_예산을_설정값으로_전달한다() throws Exception {
+        GeminiProperties properties = new GeminiProperties();
+        properties.setModel("test-model");
+        properties.setRecommendationThinkingBudget(256);
+        RecommendationValidationService validationService = new RecommendationValidationService(menuRepository);
+        RestClient.Builder builder = RestClient.builder().baseUrl("http://localhost");
+        server = MockRestServiceServer.bindTo(builder).build();
+        service = new LlmRecommendService(
+                builder.build(),
+                properties,
+                menuRepository,
+                new GeminiRecommendationParser(),
+                validationService,
+                0L
+        );
+        server.expect(requestTo("http://localhost/v1beta/models/test-model:generateContent"))
+                .andExpect(content().json("""
+                        {
+                          "generationConfig": {
+                            "thinkingConfig": {
+                              "thinkingBudget": 256
+                            }
+                          }
+                        }
+                        """, false))
+                .andRespond(withSuccess(
+                        geminiEnvelope(decisionJson(null, true, List.of())),
+                        org.springframework.http.MediaType.APPLICATION_JSON
+                ));
+
+        service.recommendFromCandidates(
+                "추천해줘", STORE_ID, List.of(menu(1L, "메뉴", 4500))
+        );
+
         server.verify();
     }
 

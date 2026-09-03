@@ -11,4 +11,5 @@ public class GeminiProperties {
     private String apiKey;
     private String model;
     private int recommendationReadTimeoutSeconds = 12;
+    private int recommendationThinkingBudget = 512;
 }

@@ -172,7 +172,13 @@ public class LlmRecommendService {
                 "contents", List.of(Map.of(
                         "role", "user",
                         "parts", List.of(Map.of("text", buildPromptInput(userInput, candidates))))),
-                "generationConfig", Map.of("temperature", 0, "responseMimeType", "application/json")
+                "generationConfig", Map.of(
+                        "temperature", 0,
+                        "responseMimeType", "application/json",
+                        "thinkingConfig", Map.of(
+                                "thinkingBudget", geminiProperties.getRecommendationThinkingBudget()
+                        )
+                )
         );
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
