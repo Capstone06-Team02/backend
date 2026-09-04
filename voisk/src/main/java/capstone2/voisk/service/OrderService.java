@@ -4,6 +4,7 @@ import capstone2.voisk.converter.MenuOptionalOptionsResponseConverter;
 import capstone2.voisk.converter.OptionSlotConverter;
 import capstone2.voisk.converter.OrderResponseConverter;
 import capstone2.voisk.dto.CartMenuNamesResponse;
+import capstone2.voisk.dto.CartOrderResponse;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
@@ -13,6 +14,7 @@ import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
+import capstone2.voisk.entity.Cart;
 import capstone2.voisk.entity.Menu;
 import capstone2.voisk.entity.MenuOptionGroup;
 import capstone2.voisk.entity.MenuOptionItem;
@@ -21,6 +23,7 @@ import capstone2.voisk.entity.OrderMenuOption;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
+import capstone2.voisk.repository.CartRepository;
 import capstone2.voisk.repository.MenuOptionGroupRepository;
 import capstone2.voisk.repository.MenuOptionItemRepository;
 import capstone2.voisk.repository.MenuRepository;
@@ -30,8 +33,10 @@ import capstone2.voisk.repository.OrderSessionRepository;
 import capstone2.voisk.repository.StoreRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
@@ -79,6 +84,7 @@ public class OrderService {
     private final MenuRepository menuRepository;
     private final MenuOptionGroupRepository menuOptionGroupRepository;
     private final MenuOptionItemRepository menuOptionItemRepository;
+    private final CartRepository cartRepository;
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
@@ -133,10 +139,29 @@ public class OrderService {
     }
 
     @Transactional
+    public CartOrderResponse confirmCartOrder(String cartId) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        Cart cart = cartRepository.findById(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
+        List<String> menuNames = orderSessionRepository.findMenuNamesByCartId(cartId);
+        if (menuNames.isEmpty()) {
+            throw new IllegalArgumentException("Cart is empty.");
+        }
+        if (!cart.isConfirmed()) {
+            cart.confirm();
+            cartRepository.save(cart);
+        }
+        return new CartOrderResponse(cart.getId(), cart.isConfirmed(), menuNames);
+    }
+
+    @Transactional
     public OrderResponse process(OrderRequest request) {
         String sid = resolveId(request.getSessionId());
         OrderSession session = sessions.computeIfAbsent(sid, ignored -> newSession());
         session.setCartId(resolveCartId(request.getCartId(), session));
+        ensureOpenCart(session.getCartId());
         addSessionToCart(session.getCartId(), sid);
 
         if (request.getRestaurantId() != null) {
@@ -294,7 +319,8 @@ public class OrderService {
 
         session.setStatus(OrderStatus.OPTION_FILLING);
         String pendingOptionText = session.getPendingOptionText();
-        if (pendingOptionText != null && !pendingOptionText.isBlank()
+        if (requiredPhase
+                && pendingOptionText != null && !pendingOptionText.isBlank()
                 && hasOptionSelection(pendingOptionText, catalog, session)) {
             session.setPendingOptionText(null);
             return handleOptionUtterance(sid, "ORDER", pendingOptionText, session, catalog);
@@ -1613,6 +1639,20 @@ public class OrderService {
             return session.getCartId();
         }
         return UUID.randomUUID().toString();
+    }
+
+    private void ensureOpenCart(String cartId) {
+        if (cartRepository == null || cartId == null || cartId.isBlank()) {
+            return;
+        }
+        Cart cart = cartRepository.findById(cartId)
+                .orElseGet(() -> cartRepository.save(Cart.builder()
+                        .id(cartId)
+                        .confirmed(false)
+                        .build()));
+        if (cart.isConfirmed()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cart is already confirmed.");
+        }
     }
 
     private void addSessionToCart(String cartId, String sessionId) {

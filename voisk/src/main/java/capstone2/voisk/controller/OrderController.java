@@ -2,6 +2,7 @@ package capstone2.voisk.controller;
 
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.CartMenuNamesResponse;
+import capstone2.voisk.dto.CartOrderResponse;
 import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
 import capstone2.voisk.dto.OptionGroupDescriptionResponse;
@@ -60,6 +61,15 @@ public class OrderController {
     @GetMapping("/carts/{cartId}/menus")
     public ResponseEntity<CartMenuNamesResponse> getCartMenuNames(@PathVariable String cartId) {
         return ResponseEntity.ok(orderService.getCartMenuNames(cartId));
+    }
+
+    @Operation(
+            summary = "Confirm cart order",
+            description = "Confirms the final order for the given cart ID."
+    )
+    @PostMapping("/carts/{cartId}/confirm")
+    public ResponseEntity<CartOrderResponse> confirmCartOrder(@PathVariable String cartId) {
+        return ResponseEntity.ok(orderService.confirmCartOrder(cartId));
     }
 
     @Operation(
