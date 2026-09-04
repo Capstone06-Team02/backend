@@ -145,15 +145,11 @@ public class OrderService {
         }
         Cart cart = cartRepository.findById(cartId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
-        List<String> menuNames = orderSessionRepository.findMenuNamesByCartId(cartId);
-        if (menuNames.isEmpty()) {
-            throw new IllegalArgumentException("Cart is empty.");
-        }
         if (!cart.isConfirmed()) {
             cart.confirm();
             cartRepository.save(cart);
         }
-        return new CartOrderResponse(cart.getId(), cart.isConfirmed(), menuNames);
+        return new CartOrderResponse(cart.getId(), cart.isConfirmed());
     }
 
     @Transactional
