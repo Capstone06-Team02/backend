@@ -135,7 +135,16 @@ public class OrderService {
         if (cartId == null || cartId.isBlank()) {
             throw new IllegalArgumentException("cartId is required.");
         }
-        return new CartMenuNamesResponse(cartId, orderSessionRepository.findMenuNamesByCartId(cartId));
+        List<OrderSessionRepository.CartMenuItemRow> rows = orderSessionRepository.findCartMenuItemsByCartId(cartId);
+        return new CartMenuNamesResponse(
+                cartId,
+                rows.stream()
+                        .map(OrderSessionRepository.CartMenuItemRow::getMenuName)
+                        .toList(),
+                rows.stream()
+                        .map(row -> new CartMenuNamesResponse.CartMenuItem(row.getSessionId(), row.getMenuName()))
+                        .toList()
+        );
     }
 
     @Transactional
@@ -156,6 +165,7 @@ public class OrderService {
     public OrderResponse process(OrderRequest request) {
         String sid = resolveId(request.getSessionId());
         OrderSession session = sessions.computeIfAbsent(sid, ignored -> newSession());
+        session.setClientSessionId(sid);
         session.setCartId(resolveCartId(request.getCartId(), session));
         ensureOpenCart(session.getCartId());
         addSessionToCart(session.getCartId(), sid);

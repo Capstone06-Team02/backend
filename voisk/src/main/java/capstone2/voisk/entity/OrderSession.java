@@ -55,6 +55,9 @@ public class OrderSession {
     @Column(name = "cart_id", length = 36)
     private String cartId;
 
+    @Column(name = "client_session_id", length = 36)
+    private String clientSessionId;
+
     @Transient
     private Integer quantity;
 

@@ -13,12 +13,19 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
     void deleteByUpdatedAtBefore(LocalDateTime threshold);
 
     @Query("""
-            SELECT m.name
+            SELECT COALESCE(s.clientSessionId, s.id) AS sessionId,
+                   m.name AS menuName
             FROM OrderSession s
             JOIN s.orderMenus om
             JOIN om.menu m
             WHERE s.cartId = :cartId
             ORDER BY s.createdAt ASC, om.id ASC
             """)
-    List<String> findMenuNamesByCartId(@Param("cartId") String cartId);
+    List<CartMenuItemRow> findCartMenuItemsByCartId(@Param("cartId") String cartId);
+
+    interface CartMenuItemRow {
+        String getSessionId();
+
+        String getMenuName();
+    }
 }
