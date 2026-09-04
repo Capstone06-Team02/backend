@@ -176,7 +176,7 @@ public class OrderService {
                 return confirmMenuAndStartOptionFilling(sid, intent, session, catalog);
             }
             return build(sid, intent, session,
-                    multiMenuConfirmationPrompt(session),
+                    menuConfirmationPrompt(session),
                     List.of("네", "아니요"),
                     List.of());
         }
@@ -195,7 +195,7 @@ public class OrderService {
 
         if (seedPendingMenusFromText(currentOptionText, session, catalog)) {
             return build(sid, intent, session,
-                    multiMenuConfirmationPrompt(session),
+                    menuConfirmationPrompt(session),
                     List.of("네", "아니요"),
                     List.of());
         }
@@ -680,13 +680,8 @@ public class OrderService {
         session.setMenuId(firstMenu.menuId());
         session.setQuantity(1);
         session.setPendingOptionText(text);
-
-        menus.stream()
-                .skip(1)
-                .forEach(menu -> pendingMenuItems(session).addLast(
-                        new OrderSession.PendingMenuItem(menu.menuId(), menu.name(), 1, null, null)
-                ));
-        session.setStatus(OrderStatus.MENU_CONFIRMING);
+        pendingMenuItems(session).clear();
+        session.setStatus(OrderStatus.CONFIRMING);
         return true;
     }
 
@@ -702,10 +697,7 @@ public class OrderService {
         if (menus.isEmpty()) {
             return;
         }
-        List<OrderDraft.Item> items = menus.stream()
-                .map(menu -> toDraftItem(menu, text))
-                .toList();
-        session.setOrderDraft(new OrderDraft(items));
+        session.setOrderDraft(new OrderDraft(List.of(toDraftItem(menus.get(0), text))));
     }
 
     private OrderDraft.Item toDraftItem(MenuCacheResponse.MenuInfo menu, String sourceText) {
@@ -865,6 +857,7 @@ public class OrderService {
         if (missingOption.isPresent()) {
             DraftMissingOption missing = missingOption.get();
             hydrateSessionFromDraftItem(session, missing.item(), catalog);
+            session.setOrderDraft(null);
             session.setStatus(OrderStatus.OPTION_FILLING);
             OptionSlot optionSlot = optionSlotConverter.toOptionSlot(
                     missing.optionGroup(),
@@ -926,19 +919,6 @@ public class OrderService {
         }
 
         hydrateSessionFromDraftItem(session, items.get(0), catalog);
-        items.stream()
-                .skip(1)
-                .forEach(item -> pendingMenuItems(session).addLast(
-                        new OrderSession.PendingMenuItem(
-                                item.menuId(),
-                                item.menuName(),
-                                item.quantity() == null || item.quantity() < 1 ? 1 : item.quantity(),
-                                item.sourceText(),
-                                selectedOptionIdsFromDraft(item, findMenuById(item.menuId(), catalog)
-                                        .or(() -> findMenuByName(item.menuName(), catalog))
-                                        .orElse(null))
-                        )
-                ));
     }
 
     private void hydrateSessionFromDraftItem(
