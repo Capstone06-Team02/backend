@@ -15,6 +15,12 @@ public class OrderResponse {
     @Schema(description = "현재 대화 세션 ID", example = "550e8400-e29b-41d4-a716-446655440000")
     private String sessionId;
 
+    @Schema(description = "Current cart ID")
+    private String cartId;
+
+    @Schema(description = "Session IDs currently grouped in the cart")
+    private List<String> cartSessionIds;
+
     @Schema(description = "분류된 사용자 의도", allowableValues = {"ORDER", "CONFIRM", "CANCEL", "UNKNOWN"})
     private String intent;
 

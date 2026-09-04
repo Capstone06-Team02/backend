@@ -1,6 +1,7 @@
 package capstone2.voisk.controller;
 
 import capstone2.voisk.dto.MenuCacheResponse;
+import capstone2.voisk.dto.CartMenuNamesResponse;
 import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
 import capstone2.voisk.dto.OptionGroupDescriptionResponse;
@@ -50,6 +51,15 @@ public class OrderController {
         OrderResponse response = orderService.process(request);
         log.info("speak API slot={}, slotFilling={}", response.getSlots(), !response.isSlotsComplete());
         return ResponseEntity.ok(response);
+    }
+
+    @Operation(
+            summary = "Cart menu names",
+            description = "Returns menu names currently stored for the given cart ID."
+    )
+    @GetMapping("/carts/{cartId}/menus")
+    public ResponseEntity<CartMenuNamesResponse> getCartMenuNames(@PathVariable String cartId) {
+        return ResponseEntity.ok(orderService.getCartMenuNames(cartId));
     }
 
     @Operation(

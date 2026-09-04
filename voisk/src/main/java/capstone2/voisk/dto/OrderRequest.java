@@ -10,6 +10,9 @@ public class OrderRequest {
     @Schema(description = "대화 세션 ID (최초 요청 시 클라이언트가 UUID 생성 후 유지)", example = "550e8400-e29b-41d4-a716-446655440000")
     private String sessionId;
 
+    @Schema(description = "Cart ID. If omitted on the first request, the server issues one. Send it again to keep adding to the same cart.", example = "3d3f6f0f-ea2e-4a1f-b083-2f5c63e3d2cb")
+    private String cartId;
+
     @Schema(description = "식당 ID. 생략하면 가장 최근 캐싱된 식당 메뉴 정보를 사용합니다.", example = "1")
     private Long restaurantId;
 

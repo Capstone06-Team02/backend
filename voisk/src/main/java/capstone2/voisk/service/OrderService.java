@@ -3,6 +3,7 @@ package capstone2.voisk.service;
 import capstone2.voisk.converter.MenuOptionalOptionsResponseConverter;
 import capstone2.voisk.converter.OptionSlotConverter;
 import capstone2.voisk.converter.OrderResponseConverter;
+import capstone2.voisk.dto.CartMenuNamesResponse;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
@@ -34,7 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.LinkedHashSet;
@@ -83,6 +86,7 @@ public class OrderService {
     private final OptionSlotConverter optionSlotConverter;
     private final OrderResponseConverter orderResponseConverter;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> cartSessions = new ConcurrentHashMap<>();
 
     Optional<OrderSession> findActiveSession(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -120,10 +124,20 @@ public class OrderService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public CartMenuNamesResponse getCartMenuNames(String cartId) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        return new CartMenuNamesResponse(cartId, orderSessionRepository.findMenuNamesByCartId(cartId));
+    }
+
     @Transactional
     public OrderResponse process(OrderRequest request) {
         String sid = resolveId(request.getSessionId());
         OrderSession session = sessions.computeIfAbsent(sid, ignored -> newSession());
+        session.setCartId(resolveCartId(request.getCartId(), session));
+        addSessionToCart(session.getCartId(), sid);
 
         if (request.getRestaurantId() != null) {
             session.setRestaurantId(request.getRestaurantId());
@@ -1591,6 +1605,41 @@ public class OrderService {
                 : sessionId;
     }
 
+    private String resolveCartId(String cartId, OrderSession session) {
+        if (cartId != null && !cartId.isBlank()) {
+            return cartId;
+        }
+        if (session.getCartId() != null && !session.getCartId().isBlank()) {
+            return session.getCartId();
+        }
+        return UUID.randomUUID().toString();
+    }
+
+    private void addSessionToCart(String cartId, String sessionId) {
+        if (cartId == null || cartId.isBlank() || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        List<String> sessionIds = cartSessions.computeIfAbsent(
+                cartId,
+                ignored -> Collections.synchronizedList(new ArrayList<>())
+        );
+        synchronized (sessionIds) {
+            if (!sessionIds.contains(sessionId)) {
+                sessionIds.add(sessionId);
+            }
+        }
+    }
+
+    private List<String> cartSessionIds(String cartId) {
+        List<String> sessionIds = cartSessions.get(cartId);
+        if (sessionIds == null) {
+            return List.of();
+        }
+        synchronized (sessionIds) {
+            return List.copyOf(sessionIds);
+        }
+    }
+
     private boolean containsAny(String text, List<String> keywords) {
         return keywords.stream().anyMatch(text::contains);
     }
@@ -1626,6 +1675,8 @@ public class OrderService {
         session.setPreviousBotResponse(message);
         return orderResponseConverter().toResponse(
                 sid,
+                session.getCartId(),
+                cartSessionIds(session.getCartId()),
                 intent,
                 session,
                 message,

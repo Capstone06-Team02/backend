@@ -52,6 +52,9 @@ public class OrderSession {
     @Transient
     private String menu;
 
+    @Column(name = "cart_id", length = 36)
+    private String cartId;
+
     @Transient
     private Integer quantity;
 
