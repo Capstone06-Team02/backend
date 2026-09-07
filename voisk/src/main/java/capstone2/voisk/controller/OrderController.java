@@ -23,6 +23,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -70,6 +71,18 @@ public class OrderController {
     @PostMapping("/carts/{cartId}/confirm")
     public ResponseEntity<CartOrderResponse> confirmCartOrder(@PathVariable String cartId) {
         return ResponseEntity.ok(orderService.confirmCartOrder(cartId));
+    }
+
+    @Operation(
+            summary = "Remove cart session",
+            description = "Removes the given order session from the cart and returns the remaining cart menu names."
+    )
+    @DeleteMapping("/carts/{cartId}/sessions/{sessionId}")
+    public ResponseEntity<CartMenuNamesResponse> removeCartSession(
+            @PathVariable String cartId,
+            @PathVariable String sessionId
+    ) {
+        return ResponseEntity.ok(orderService.removeCartSession(cartId, sessionId));
     }
 
     @Operation(

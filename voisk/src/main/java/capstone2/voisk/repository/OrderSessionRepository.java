@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 public interface OrderSessionRepository extends JpaRepository<OrderSession, Long> {
 
@@ -22,6 +23,17 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
             ORDER BY s.createdAt ASC, om.id ASC
             """)
     List<CartMenuItemRow> findCartMenuItemsByCartId(@Param("cartId") String cartId);
+
+    @Query("""
+            SELECT s
+            FROM OrderSession s
+            WHERE s.cartId = :cartId
+              AND (s.clientSessionId = :sessionId OR s.id = :sessionId)
+            """)
+    Optional<OrderSession> findCartSession(
+            @Param("cartId") String cartId,
+            @Param("sessionId") String sessionId
+    );
 
     interface CartMenuItemRow {
         String getSessionId();

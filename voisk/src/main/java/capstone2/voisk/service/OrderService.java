@@ -162,6 +162,28 @@ public class OrderService {
     }
 
     @Transactional
+    public CartMenuNamesResponse removeCartSession(String cartId, String sessionId) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("sessionId is required.");
+        }
+        Cart cart = cartRepository.findById(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
+        if (cart.isConfirmed()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cart is already confirmed.");
+        }
+        OrderSession session = orderSessionRepository.findCartSession(cartId, sessionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart session not found."));
+        session.setCartId(null);
+        orderSessionRepository.save(session);
+        findActiveSession(sessionId).ifPresent(activeSession -> activeSession.setCartId(null));
+        removeSessionFromCart(cartId, sessionId);
+        return getCartMenuNames(cartId);
+    }
+
+    @Transactional
     public OrderResponse process(OrderRequest request) {
         String sid = resolveId(request.getSessionId());
         OrderSession session = sessions.computeIfAbsent(sid, ignored -> newSession());
@@ -1683,6 +1705,16 @@ public class OrderService {
         }
         synchronized (sessionIds) {
             return List.copyOf(sessionIds);
+        }
+    }
+
+    private void removeSessionFromCart(String cartId, String sessionId) {
+        List<String> sessionIds = cartSessions.get(cartId);
+        if (sessionIds == null) {
+            return;
+        }
+        synchronized (sessionIds) {
+            sessionIds.remove(sessionId);
         }
     }
 
