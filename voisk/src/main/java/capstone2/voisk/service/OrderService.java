@@ -14,6 +14,7 @@ import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.OwnerOrderEventResponse;
+import capstone2.voisk.dto.OrderProgressStatusEventResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.Cart;
 import capstone2.voisk.entity.Menu;
@@ -21,6 +22,7 @@ import capstone2.voisk.entity.MenuOptionGroup;
 import capstone2.voisk.entity.MenuOptionItem;
 import capstone2.voisk.entity.OrderMenu;
 import capstone2.voisk.entity.OrderMenuOption;
+import capstone2.voisk.entity.OrderProgressStatus;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
@@ -93,6 +95,7 @@ public class OrderService {
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
     private final OwnerOrderSseService ownerOrderSseService;
+    private final CustomerOrderSseService customerOrderSseService;
     private final MenuOptionalOptionsResponseConverter menuOptionalOptionsResponseConverter;
     private final OptionSlotConverter optionSlotConverter;
     private final OrderResponseConverter orderResponseConverter;
@@ -174,6 +177,45 @@ public class OrderService {
             throw new IllegalArgumentException("storeId is required.");
         }
         return buildOwnerOrderEvents(orderSessionRepository.findOwnerOrderRowsByStoreId(storeId));
+    }
+
+    @Transactional
+    public OrderProgressStatusEventResponse updateOrderProgressStatus(
+            String cartId,
+            OrderProgressStatus progressStatus
+    ) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        if (progressStatus == null) {
+            throw new IllegalArgumentException("status is required.");
+        }
+
+        Cart cart = cartRepository.findById(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
+        if (!cart.isConfirmed()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cart is not confirmed.");
+        }
+
+        boolean changed = cart.getProgressStatus() != progressStatus;
+        cart.setProgressStatus(progressStatus);
+        cartRepository.save(cart);
+
+        OwnerOrderEventResponse ownerOrder = buildOwnerOrderEvent(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Confirmed order not found."));
+        OrderProgressStatusEventResponse statusEvent = new OrderProgressStatusEventResponse(
+                "ORDER_STATUS_CHANGED",
+                cartId,
+                ownerOrder.storeId(),
+                progressStatus,
+                orderProgressMessage(progressStatus),
+                LocalDateTime.now()
+        );
+
+        if (changed) {
+            publishStatusChangedAfterCommit(statusEvent);
+        }
+        return statusEvent;
     }
 
     @Transactional
@@ -1833,6 +1875,7 @@ public class OrderService {
                         .filter(Objects::nonNull)
                         .min(LocalDateTime::compareTo)
                         .orElse(null),
+                first.getProgressStatus(),
                 totalPrice,
                 items
         ));
@@ -1850,6 +1893,31 @@ public class OrderService {
                 ownerOrderSseService.publishOrderCreated(orderEvent);
             }
         });
+    }
+
+    private void publishStatusChangedAfterCommit(OrderProgressStatusEventResponse statusEvent) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            ownerOrderSseService.publishStatusChanged(statusEvent);
+            customerOrderSseService.publishStatusChanged(statusEvent);
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                ownerOrderSseService.publishStatusChanged(statusEvent);
+                customerOrderSseService.publishStatusChanged(statusEvent);
+            }
+        });
+    }
+
+    private String orderProgressMessage(OrderProgressStatus progressStatus) {
+        return switch (progressStatus) {
+            case WAITING -> "주문이 접수되었습니다.";
+            case PREPARING -> "주문 제조가 시작되었습니다.";
+            case COMPLETED -> "주문 제조가 완료되었습니다. 픽업해주세요.";
+            case CANCELED -> "주문이 취소되었습니다.";
+        };
     }
 
     private static class MutableOwnerOrderItem {

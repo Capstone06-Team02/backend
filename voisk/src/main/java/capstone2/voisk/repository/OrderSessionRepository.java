@@ -1,5 +1,6 @@
 package capstone2.voisk.repository;
 
+import capstone2.voisk.entity.OrderProgressStatus;
 import capstone2.voisk.entity.OrderSession;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -52,7 +53,8 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
                    ogt.name AS optionGroupName,
                    oit.name AS optionName,
                    moi.extraPrice AS optionExtraPrice,
-                   omo.quantity AS optionQuantity
+                   omo.quantity AS optionQuantity,
+                   c.progressStatus AS progressStatus
             FROM OrderSession s
             JOIN s.store st
             JOIN s.orderMenus om
@@ -62,7 +64,9 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
             LEFT JOIN moi.menuOptionGroup mog
             LEFT JOIN mog.optionGroupTemplate ogt
             LEFT JOIN moi.optionItemTemplate oit
-            WHERE s.cartId = :cartId
+            , Cart c
+            WHERE c.id = s.cartId
+              AND s.cartId = :cartId
             ORDER BY s.createdAt ASC, om.id ASC, omo.id ASC
             """)
     List<OwnerOrderRow> findOwnerOrderRowsByCartId(@Param("cartId") String cartId);
@@ -84,8 +88,9 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
                    ogt.name AS optionGroupName,
                    oit.name AS optionName,
                    moi.extraPrice AS optionExtraPrice,
-                   omo.quantity AS optionQuantity
-            FROM OrderSession s, Cart c
+                   omo.quantity AS optionQuantity,
+                   c.progressStatus AS progressStatus
+            FROM OrderSession s
             JOIN s.store st
             JOIN s.orderMenus om
             JOIN om.menu m
@@ -94,6 +99,7 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
             LEFT JOIN moi.menuOptionGroup mog
             LEFT JOIN mog.optionGroupTemplate ogt
             LEFT JOIN moi.optionItemTemplate oit
+            , Cart c
             WHERE c.id = s.cartId
               AND c.confirmed = true
               AND st.id = :storeId
@@ -141,5 +147,7 @@ public interface OrderSessionRepository extends JpaRepository<OrderSession, Long
         Integer getOptionExtraPrice();
 
         Integer getOptionQuantity();
+
+        OrderProgressStatus getProgressStatus();
     }
 }

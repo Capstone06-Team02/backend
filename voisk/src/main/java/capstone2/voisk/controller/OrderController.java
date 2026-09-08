@@ -8,12 +8,15 @@ import capstone2.voisk.dto.MenuOptionalOptionsResponse;
 import capstone2.voisk.dto.OptionGroupDescriptionResponse;
 import capstone2.voisk.dto.OrderOptionSelectionRequest;
 import capstone2.voisk.dto.OrderOptionSelectionResponse;
+import capstone2.voisk.dto.OrderProgressStatusEventResponse;
+import capstone2.voisk.dto.OrderProgressStatusUpdateRequest;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.OwnerOrderEventResponse;
 import capstone2.voisk.dto.RequiredOptionSummaryRequest;
 import capstone2.voisk.dto.RequiredOptionSummaryResponse;
 import capstone2.voisk.dto.SignatureMenuListResponse;
+import capstone2.voisk.service.CustomerOrderSseService;
 import capstone2.voisk.service.OwnerOrderSseService;
 import capstone2.voisk.service.OrderOptionSelectionService;
 import capstone2.voisk.service.OrderService;
@@ -28,6 +31,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -50,6 +54,7 @@ public class OrderController {
     private final StoreMenuCacheService storeMenuCacheService;
     private final SignatureMenuService signatureMenuService;
     private final OwnerOrderSseService ownerOrderSseService;
+    private final CustomerOrderSseService customerOrderSseService;
 
     @Operation(
             summary = "주문 대화 처리",
@@ -63,8 +68,8 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "Cart menu names",
-            description = "Returns menu names currently stored for the given cart ID."
+            summary = "카트 메뉴명 목록 조회",
+            description = "특정 카트에 현재 담겨 있는 주문 세션의 메뉴명 목록을 조회합니다."
     )
     @GetMapping("/carts/{cartId}/menus")
     public ResponseEntity<CartMenuNamesResponse> getCartMenuNames(@PathVariable String cartId) {
@@ -72,8 +77,8 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "Confirm cart order",
-            description = "Confirms the final order for the given cart ID."
+            summary = "카트 주문 최종 확정",
+            description = "특정 카트 ID에 담긴 최종 주문을 확정합니다. 확정된 주문은 사장님 주문 SSE로 전송됩니다."
     )
     @PostMapping("/carts/{cartId}/confirm")
     public ResponseEntity<CartOrderResponse> confirmCartOrder(@PathVariable String cartId) {
@@ -81,8 +86,32 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "Owner order event stream",
-            description = "Streams newly confirmed orders for the given store."
+            summary = "주문 제조 상태 변경",
+            description = "확정된 카트 주문의 제조 상태를 변경하고 사장님/손님 SSE 구독자에게 상태 변경 알림을 전송합니다."
+    )
+    @PatchMapping("/carts/{cartId}/status")
+    public ResponseEntity<OrderProgressStatusEventResponse> updateOrderProgressStatus(
+            @PathVariable String cartId,
+            @RequestBody OrderProgressStatusUpdateRequest request
+    ) {
+        return ResponseEntity.ok(orderService.updateOrderProgressStatus(
+                cartId,
+                request == null ? null : request.status()
+        ));
+    }
+
+    @Operation(
+            summary = "손님 주문 상태 SSE 구독",
+            description = "특정 카트 주문의 제조 시작, 제조 완료 등 상태 변경 알림을 손님 화면으로 실시간 전송합니다."
+    )
+    @GetMapping(value = "/carts/{cartId}/status/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamCustomerOrderStatus(@PathVariable String cartId) {
+        return customerOrderSseService.subscribe(cartId);
+    }
+
+    @Operation(
+            summary = "사장님 주문 SSE 구독",
+            description = "특정 매장의 새 주문 접수와 주문 제조 상태 변경 알림을 사장님 화면으로 실시간 전송합니다."
     )
     @GetMapping(value = "/stores/{storeId}/orders/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamOwnerOrders(@PathVariable Long storeId) {
@@ -90,8 +119,8 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "Owner confirmed orders",
-            description = "Returns confirmed orders for the given store. Use this before opening the SSE stream."
+            summary = "사장님 확정 주문 목록 조회",
+            description = "특정 매장의 확정된 주문 목록을 조회합니다. 사장님 화면에서 SSE 연결을 열기 전에 초기 주문 목록을 불러올 때 사용합니다."
     )
     @GetMapping("/stores/{storeId}/orders")
     public ResponseEntity<List<OwnerOrderEventResponse>> getOwnerOrders(@PathVariable Long storeId) {
@@ -99,8 +128,8 @@ public class OrderController {
     }
 
     @Operation(
-            summary = "Remove cart session",
-            description = "Removes the given order session from the cart and returns the remaining cart menu names."
+            summary = "카트 주문 세션 삭제",
+            description = "특정 카트에서 지정한 주문 세션을 제거하고, 남아 있는 카트 메뉴명 목록을 반환합니다."
     )
     @DeleteMapping("/carts/{cartId}/sessions/{sessionId}")
     public ResponseEntity<CartMenuNamesResponse> removeCartSession(

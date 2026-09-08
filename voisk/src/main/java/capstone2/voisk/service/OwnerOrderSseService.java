@@ -1,6 +1,7 @@
 package capstone2.voisk.service;
 
 import capstone2.voisk.dto.OwnerOrderEventResponse;
+import capstone2.voisk.dto.OrderProgressStatusEventResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -51,6 +52,26 @@ public class OwnerOrderSseService {
                 remove(orderEvent.storeId(), emitter);
                 log.warn("Failed to send owner order SSE. storeId={}, cartId={}",
                         orderEvent.storeId(), orderEvent.cartId(), error);
+            }
+        }
+    }
+
+    public void publishStatusChanged(OrderProgressStatusEventResponse statusEvent) {
+        if (statusEvent == null || statusEvent.storeId() == null) {
+            return;
+        }
+
+        List<SseEmitter> emitters = emittersByStoreId.getOrDefault(statusEvent.storeId(), new CopyOnWriteArrayList<>());
+        for (SseEmitter emitter : emitters) {
+            try {
+                emitter.send(SseEmitter.event()
+                        .name("ORDER_STATUS_CHANGED")
+                        .id(statusEvent.cartId())
+                        .data(statusEvent, MediaType.APPLICATION_JSON));
+            } catch (IOException | IllegalStateException error) {
+                remove(statusEvent.storeId(), emitter);
+                log.warn("Failed to send owner order status SSE. storeId={}, cartId={}",
+                        statusEvent.storeId(), statusEvent.cartId(), error);
             }
         }
     }

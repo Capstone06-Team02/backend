@@ -1,5 +1,7 @@
 package capstone2.voisk.dto;
 
+import capstone2.voisk.entity.OrderProgressStatus;
+
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -9,6 +11,7 @@ public record OwnerOrderEventResponse(
         Long storeId,
         String storeName,
         LocalDateTime orderedAt,
+        OrderProgressStatus progressStatus,
         Integer totalPrice,
         List<OrderItem> items
 ) {
