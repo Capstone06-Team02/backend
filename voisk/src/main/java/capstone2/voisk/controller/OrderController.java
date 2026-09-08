@@ -10,9 +10,11 @@ import capstone2.voisk.dto.OrderOptionSelectionRequest;
 import capstone2.voisk.dto.OrderOptionSelectionResponse;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
+import capstone2.voisk.dto.OwnerOrderEventResponse;
 import capstone2.voisk.dto.RequiredOptionSummaryRequest;
 import capstone2.voisk.dto.RequiredOptionSummaryResponse;
 import capstone2.voisk.dto.SignatureMenuListResponse;
+import capstone2.voisk.service.OwnerOrderSseService;
 import capstone2.voisk.service.OrderOptionSelectionService;
 import capstone2.voisk.service.OrderService;
 import capstone2.voisk.service.RequiredOptionSummaryService;
@@ -22,6 +24,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +33,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.List;
 
 @Tag(name = "주문", description = "음성 키오스크 주문 API")
 @RestController
@@ -43,6 +49,7 @@ public class OrderController {
     private final RequiredOptionSummaryService requiredOptionSummaryService;
     private final StoreMenuCacheService storeMenuCacheService;
     private final SignatureMenuService signatureMenuService;
+    private final OwnerOrderSseService ownerOrderSseService;
 
     @Operation(
             summary = "주문 대화 처리",
@@ -71,6 +78,24 @@ public class OrderController {
     @PostMapping("/carts/{cartId}/confirm")
     public ResponseEntity<CartOrderResponse> confirmCartOrder(@PathVariable String cartId) {
         return ResponseEntity.ok(orderService.confirmCartOrder(cartId));
+    }
+
+    @Operation(
+            summary = "Owner order event stream",
+            description = "Streams newly confirmed orders for the given store."
+    )
+    @GetMapping(value = "/stores/{storeId}/orders/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamOwnerOrders(@PathVariable Long storeId) {
+        return ownerOrderSseService.subscribe(storeId);
+    }
+
+    @Operation(
+            summary = "Owner confirmed orders",
+            description = "Returns confirmed orders for the given store. Use this before opening the SSE stream."
+    )
+    @GetMapping("/stores/{storeId}/orders")
+    public ResponseEntity<List<OwnerOrderEventResponse>> getOwnerOrders(@PathVariable Long storeId) {
+        return ResponseEntity.ok(orderService.getConfirmedOwnerOrders(storeId));
     }
 
     @Operation(
