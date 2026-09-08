@@ -358,7 +358,7 @@ public class OrderService {
                 requiredPhase
                         ? requiredOptionPrompt(session.getMenu(), activeSlots)
                         : optionalOptionListPrompt(session.getMenu(), optionalGroups),
-                requiredPhase ? quickRepliesForOptions(activeSlots, true) : quickRepliesForOptionalGroups(optionalGroups),
+                requiredPhase ? quickRepliesForRequiredPrompt(activeSlots) : quickRepliesForOptionalGroups(optionalGroups),
                 requiredPhase ? activeSlots : List.of());
     }
 
@@ -396,7 +396,9 @@ public class OrderService {
 
         Optional<OptionSelection> optionSelection = findOptionSelection(text, menu, selectableGroups);
         if (optionSelection.isPresent()) {
-            return askOptionSelectionConfirmation(sid, intent, session, menu, optionSelection.get());
+            applyConfirmedOptionSelection(session, menu, optionSelection.get().group(), optionSelection.get().item());
+            session.setPendingOptionalGroupId(null);
+            return continueAfterConfirmedOptionSelection(sid, "ORDER", session, menu);
         }
 
         Set<Long> selected = selectedOptionIds(session);
@@ -404,7 +406,7 @@ public class OrderService {
         if (!requiredSlots.isEmpty()) {
             return build(sid, intent, session,
                     requiredOptionPrompt(session.getMenu(), requiredSlots),
-                    quickRepliesForOptions(requiredSlots, true),
+                    quickRepliesForRequiredPrompt(requiredSlots),
                     requiredSlots);
         }
 
@@ -441,7 +443,9 @@ public class OrderService {
             if (session.getPendingOptionalGroupId() != null) {
                 Optional<OptionSelection> optionSelection = findOptionSelection(text, menu, List.of(group));
                 if (optionSelection.isPresent()) {
-                    return askOptionSelectionConfirmation(sid, intent, session, menu, optionSelection.get());
+                    applyConfirmedOptionSelection(session, menu, optionSelection.get().group(), optionSelection.get().item());
+                    session.setPendingOptionalGroupId(null);
+                    return continueAfterConfirmedOptionSelection(sid, "ORDER", session, menu);
                 }
 
                 OptionSlot optionSlot = optionSlotConverter.toOptionSlot(group, selectedOptionIds(session));
@@ -684,7 +688,7 @@ public class OrderService {
         if (!requiredSlots.isEmpty()) {
             return build(sid, intent, session,
                     requiredOptionPrompt(session.getMenu(), requiredSlots),
-                    quickRepliesForOptions(requiredSlots, true),
+                    quickRepliesForRequiredPrompt(requiredSlots),
                     requiredSlots);
         }
 
@@ -933,7 +937,7 @@ public class OrderService {
             );
             return Optional.of(build(sid, intent, session,
                     requiredOptionPrompt(missing.item().menuName(), List.of(optionSlot)),
-                    quickRepliesForOptions(List.of(optionSlot), true),
+                    quickRepliesForRequiredPrompt(List.of(optionSlot)),
                     List.of(optionSlot)));
         }
 
@@ -1495,11 +1499,13 @@ public class OrderService {
         Optional<String> defaultOptionName = defaultOptionName(slot);
         if (menuName != null && !menuName.isBlank()) {
             return defaultOptionName
-                    .map(defaultOption -> String.format("%s의 %s 옵션 기본 %s에서 변경하시겠어요?", menuName, optionName, defaultOption))
+                    .map(defaultOption -> String.format("%s %s 옵션 %s%s 드릴까요?",
+                            menuName, optionName, defaultOption, roParticle(defaultOption)))
                     .orElseGet(() -> String.format("%s의 필수 옵션 %s를 선택해주세요.", menuName, optionName));
         }
         return defaultOptionName
-                .map(defaultOption -> String.format("%s 옵션 기본 %s에서 변경하시겠어요?", optionName, defaultOption))
+                .map(defaultOption -> String.format("%s 옵션 %s%s 드릴까요?",
+                        optionName, defaultOption, roParticle(defaultOption)))
                 .orElse(optionName + " 옵션을 선택해주세요.");
     }
 
@@ -1509,6 +1515,18 @@ public class OrderService {
                 .map(OptionSlot.OptionCandidate::name)
                 .filter(name -> name != null && !name.isBlank())
                 .findFirst();
+    }
+
+    private String roParticle(String value) {
+        if (value == null || value.isBlank()) {
+            return "로";
+        }
+        char last = value.trim().charAt(value.trim().length() - 1);
+        if (last < '가' || last > '힣') {
+            return "로";
+        }
+        int jong = (last - '가') % 28;
+        return jong == 0 || jong == 8 ? "로" : "으로";
     }
 
     private String optionalOptionListPrompt(List<MenuCacheResponse.OptionGroupInfo> optionalGroups) {
@@ -1574,6 +1592,23 @@ public class OrderService {
             return replies;
         }
         return java.util.stream.Stream.concat(replies.stream().limit(7), java.util.stream.Stream.of("확인"))
+                .toList();
+    }
+
+    private List<String> quickRepliesForRequiredPrompt(List<OptionSlot> slots) {
+        List<String> replies = quickRepliesForOptions(slots, true);
+        boolean hasDefaultOption = slots.stream()
+                .flatMap(slot -> emptyIfNull(slot.candidates()).stream())
+                .anyMatch(candidate -> Boolean.TRUE.equals(candidate.defaultSelected()));
+        if (!hasDefaultOption) {
+            return replies;
+        }
+        return java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of("네"),
+                        replies.stream()
+                                .filter(reply -> !"네".equals(reply))
+                                .limit(7)
+                )
                 .toList();
     }
 
