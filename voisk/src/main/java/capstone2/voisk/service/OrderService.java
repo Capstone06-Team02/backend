@@ -13,6 +13,8 @@ import capstone2.voisk.dto.OptionSlot;
 import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
+import capstone2.voisk.dto.OwnerOrderEventResponse;
+import capstone2.voisk.dto.OrderProgressStatusEventResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
 import capstone2.voisk.entity.Cart;
 import capstone2.voisk.entity.Menu;
@@ -20,6 +22,7 @@ import capstone2.voisk.entity.MenuOptionGroup;
 import capstone2.voisk.entity.MenuOptionItem;
 import capstone2.voisk.entity.OrderMenu;
 import capstone2.voisk.entity.OrderMenuOption;
+import capstone2.voisk.entity.OrderProgressStatus;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
@@ -36,6 +39,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
@@ -45,6 +50,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +94,8 @@ public class OrderService {
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
+    private final OwnerOrderSseService ownerOrderSseService;
+    private final CustomerOrderSseService customerOrderSseService;
     private final MenuOptionalOptionsResponseConverter menuOptionalOptionsResponseConverter;
     private final OptionSlotConverter optionSlotConverter;
     private final OrderResponseConverter orderResponseConverter;
@@ -154,11 +162,60 @@ public class OrderService {
         }
         Cart cart = cartRepository.findById(cartId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
-        if (!cart.isConfirmed()) {
+        boolean newlyConfirmed = !cart.isConfirmed();
+        if (newlyConfirmed) {
             cart.confirm();
             cartRepository.save(cart);
+            buildOwnerOrderEvent(cartId).ifPresent(this::publishOrderCreatedAfterCommit);
         }
         return new CartOrderResponse(cart.getId(), cart.isConfirmed());
+    }
+
+    @Transactional(readOnly = true)
+    public List<OwnerOrderEventResponse> getConfirmedOwnerOrders(Long storeId) {
+        if (storeId == null) {
+            throw new IllegalArgumentException("storeId is required.");
+        }
+        return buildOwnerOrderEvents(orderSessionRepository.findOwnerOrderRowsByStoreId(storeId));
+    }
+
+    @Transactional
+    public OrderProgressStatusEventResponse updateOrderProgressStatus(
+            String cartId,
+            OrderProgressStatus progressStatus
+    ) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        if (progressStatus == null) {
+            throw new IllegalArgumentException("status is required.");
+        }
+
+        Cart cart = cartRepository.findById(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
+        if (!cart.isConfirmed()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cart is not confirmed.");
+        }
+
+        boolean changed = cart.getProgressStatus() != progressStatus;
+        cart.setProgressStatus(progressStatus);
+        cartRepository.save(cart);
+
+        OwnerOrderEventResponse ownerOrder = buildOwnerOrderEvent(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Confirmed order not found."));
+        OrderProgressStatusEventResponse statusEvent = new OrderProgressStatusEventResponse(
+                "ORDER_STATUS_CHANGED",
+                cartId,
+                ownerOrder.storeId(),
+                progressStatus,
+                orderProgressMessage(progressStatus),
+                LocalDateTime.now()
+        );
+
+        if (changed) {
+            publishStatusChangedAfterCommit(statusEvent);
+        }
+        return statusEvent;
     }
 
     @Transactional
@@ -1750,6 +1807,153 @@ public class OrderService {
         }
         synchronized (sessionIds) {
             sessionIds.remove(sessionId);
+        }
+    }
+
+    private Optional<OwnerOrderEventResponse> buildOwnerOrderEvent(String cartId) {
+        return buildOwnerOrderEvents(orderSessionRepository.findOwnerOrderRowsByCartId(cartId)).stream()
+                .findFirst();
+    }
+
+    private List<OwnerOrderEventResponse> buildOwnerOrderEvents(List<OrderSessionRepository.OwnerOrderRow> rows) {
+        Map<String, List<OrderSessionRepository.OwnerOrderRow>> rowsByCartId = emptyIfNull(rows).stream()
+                .filter(row -> row.getCartId() != null && !row.getCartId().isBlank())
+                .collect(Collectors.groupingBy(
+                        OrderSessionRepository.OwnerOrderRow::getCartId,
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        return rowsByCartId.values().stream()
+                .map(this::toOwnerOrderEvent)
+                .flatMap(Optional::stream)
+                .toList();
+    }
+
+    private Optional<OwnerOrderEventResponse> toOwnerOrderEvent(List<OrderSessionRepository.OwnerOrderRow> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return Optional.empty();
+        }
+
+        OrderSessionRepository.OwnerOrderRow first = rows.get(0);
+        Map<Long, MutableOwnerOrderItem> itemsByOrderMenuId = new LinkedHashMap<>();
+        for (OrderSessionRepository.OwnerOrderRow row : rows) {
+            if (row.getOrderMenuId() == null) {
+                continue;
+            }
+            MutableOwnerOrderItem item = itemsByOrderMenuId.computeIfAbsent(
+                    row.getOrderMenuId(),
+                    ignored -> new MutableOwnerOrderItem(row)
+            );
+            if (row.getOptionItemId() != null) {
+                item.options.add(new OwnerOrderEventResponse.OptionItem(
+                        row.getOptionItemId(),
+                        row.getOptionGroupName(),
+                        row.getOptionName(),
+                        row.getOptionExtraPrice(),
+                        row.getOptionQuantity()
+                ));
+            }
+        }
+
+        List<OwnerOrderEventResponse.OrderItem> items = itemsByOrderMenuId.values().stream()
+                .map(MutableOwnerOrderItem::toResponse)
+                .toList();
+        int totalPrice = items.stream()
+                .map(OwnerOrderEventResponse.OrderItem::totalPrice)
+                .filter(Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+
+        return Optional.of(new OwnerOrderEventResponse(
+                "ORDER_CREATED",
+                first.getCartId(),
+                first.getStoreId(),
+                first.getStoreName(),
+                rows.stream()
+                        .map(OrderSessionRepository.OwnerOrderRow::getOrderedAt)
+                        .filter(Objects::nonNull)
+                        .min(LocalDateTime::compareTo)
+                        .orElse(null),
+                first.getProgressStatus(),
+                totalPrice,
+                items
+        ));
+    }
+
+    private void publishOrderCreatedAfterCommit(OwnerOrderEventResponse orderEvent) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            ownerOrderSseService.publishOrderCreated(orderEvent);
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                ownerOrderSseService.publishOrderCreated(orderEvent);
+            }
+        });
+    }
+
+    private void publishStatusChangedAfterCommit(OrderProgressStatusEventResponse statusEvent) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            ownerOrderSseService.publishStatusChanged(statusEvent);
+            customerOrderSseService.publishStatusChanged(statusEvent);
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                ownerOrderSseService.publishStatusChanged(statusEvent);
+                customerOrderSseService.publishStatusChanged(statusEvent);
+            }
+        });
+    }
+
+    private String orderProgressMessage(OrderProgressStatus progressStatus) {
+        return switch (progressStatus) {
+            case WAITING -> "주문이 접수되었습니다.";
+            case PREPARING -> "주문 제조가 시작되었습니다.";
+            case COMPLETED -> "주문 제조가 완료되었습니다. 픽업해주세요.";
+            case CANCELED -> "주문이 취소되었습니다.";
+        };
+    }
+
+    private static class MutableOwnerOrderItem {
+        private final Long orderMenuId;
+        private final Long menuId;
+        private final String menuName;
+        private final Integer quantity;
+        private final Integer menuPrice;
+        private final Integer unitPrice;
+        private final List<OwnerOrderEventResponse.OptionItem> options = new ArrayList<>();
+
+        private MutableOwnerOrderItem(OrderSessionRepository.OwnerOrderRow row) {
+            this.orderMenuId = row.getOrderMenuId();
+            this.menuId = row.getMenuId();
+            this.menuName = row.getMenuName();
+            this.quantity = row.getQuantity();
+            this.menuPrice = row.getMenuPrice();
+            this.unitPrice = row.getUnitPrice();
+        }
+
+        private OwnerOrderEventResponse.OrderItem toResponse() {
+            int safeQuantity = quantity == null || quantity < 1 ? 1 : quantity;
+            Integer optionExtraPrice = unitPrice == null || menuPrice == null ? null : unitPrice - menuPrice;
+            Integer totalPrice = unitPrice == null ? null : unitPrice * safeQuantity;
+
+            return new OwnerOrderEventResponse.OrderItem(
+                    orderMenuId,
+                    menuId,
+                    menuName,
+                    quantity,
+                    menuPrice,
+                    optionExtraPrice,
+                    unitPrice,
+                    totalPrice,
+                    List.copyOf(options)
+            );
         }
     }
 

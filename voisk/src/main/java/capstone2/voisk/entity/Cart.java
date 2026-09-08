@@ -2,6 +2,8 @@ package capstone2.voisk.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -31,6 +33,11 @@ public class Cart {
     @Column(name = "is_confirmed", nullable = false)
     private Boolean confirmed = false;
 
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "progress_status", length = 20, nullable = false)
+    private OrderProgressStatus progressStatus = OrderProgressStatus.WAITING;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -42,6 +49,9 @@ public class Cart {
         if (confirmed == null) {
             confirmed = false;
         }
+        if (progressStatus == null) {
+            progressStatus = OrderProgressStatus.WAITING;
+        }
         LocalDateTime now = LocalDateTime.now();
         createdAt = now;
         updatedAt = now;
@@ -52,6 +62,9 @@ public class Cart {
         if (confirmed == null) {
             confirmed = false;
         }
+        if (progressStatus == null) {
+            progressStatus = OrderProgressStatus.WAITING;
+        }
         updatedAt = LocalDateTime.now();
     }
 
@@ -61,6 +74,9 @@ public class Cart {
 
     public void confirm() {
         confirmed = true;
+        if (progressStatus == null) {
+            progressStatus = OrderProgressStatus.WAITING;
+        }
         updatedAt = LocalDateTime.now();
     }
 }
