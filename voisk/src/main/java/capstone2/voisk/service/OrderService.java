@@ -3,6 +3,8 @@ package capstone2.voisk.service;
 import capstone2.voisk.converter.MenuOptionalOptionsResponseConverter;
 import capstone2.voisk.converter.OptionSlotConverter;
 import capstone2.voisk.converter.OrderResponseConverter;
+import capstone2.voisk.dto.CartMenuNamesResponse;
+import capstone2.voisk.dto.CartOrderResponse;
 import capstone2.voisk.dto.MenuCacheResponse;
 import capstone2.voisk.dto.MenuDescriptionResponse;
 import capstone2.voisk.dto.MenuOptionalOptionsResponse;
@@ -12,6 +14,7 @@ import capstone2.voisk.dto.OrderDraft;
 import capstone2.voisk.dto.OrderRequest;
 import capstone2.voisk.dto.OrderResponse;
 import capstone2.voisk.dto.SlotExtractionResult;
+import capstone2.voisk.entity.Cart;
 import capstone2.voisk.entity.Menu;
 import capstone2.voisk.entity.MenuOptionGroup;
 import capstone2.voisk.entity.MenuOptionItem;
@@ -20,6 +23,7 @@ import capstone2.voisk.entity.OrderMenuOption;
 import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.entity.OrderStatus;
 import capstone2.voisk.entity.Store;
+import capstone2.voisk.repository.CartRepository;
 import capstone2.voisk.repository.MenuOptionGroupRepository;
 import capstone2.voisk.repository.MenuOptionItemRepository;
 import capstone2.voisk.repository.MenuRepository;
@@ -29,12 +33,16 @@ import capstone2.voisk.repository.OrderSessionRepository;
 import capstone2.voisk.repository.StoreRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.LinkedHashSet;
@@ -76,6 +84,7 @@ public class OrderService {
     private final MenuRepository menuRepository;
     private final MenuOptionGroupRepository menuOptionGroupRepository;
     private final MenuOptionItemRepository menuOptionItemRepository;
+    private final CartRepository cartRepository;
     private final OrderSessionRepository orderSessionRepository;
     private final OrderMenuRepository orderMenuRepository;
     private final OrderMenuOptionRepository orderMenuOptionRepository;
@@ -83,6 +92,7 @@ public class OrderService {
     private final OptionSlotConverter optionSlotConverter;
     private final OrderResponseConverter orderResponseConverter;
     private final Map<String, OrderSession> sessions = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> cartSessions = new ConcurrentHashMap<>();
 
     Optional<OrderSession> findActiveSession(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -120,10 +130,67 @@ public class OrderService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public CartMenuNamesResponse getCartMenuNames(String cartId) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        List<OrderSessionRepository.CartMenuItemRow> rows = orderSessionRepository.findCartMenuItemsByCartId(cartId);
+        return new CartMenuNamesResponse(
+                cartId,
+                rows.stream()
+                        .map(OrderSessionRepository.CartMenuItemRow::getMenuName)
+                        .toList(),
+                rows.stream()
+                        .map(row -> new CartMenuNamesResponse.CartMenuItem(row.getSessionId(), row.getMenuName()))
+                        .toList()
+        );
+    }
+
+    @Transactional
+    public CartOrderResponse confirmCartOrder(String cartId) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        Cart cart = cartRepository.findById(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
+        if (!cart.isConfirmed()) {
+            cart.confirm();
+            cartRepository.save(cart);
+        }
+        return new CartOrderResponse(cart.getId(), cart.isConfirmed());
+    }
+
+    @Transactional
+    public CartMenuNamesResponse removeCartSession(String cartId, String sessionId) {
+        if (cartId == null || cartId.isBlank()) {
+            throw new IllegalArgumentException("cartId is required.");
+        }
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("sessionId is required.");
+        }
+        Cart cart = cartRepository.findById(cartId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart not found."));
+        if (cart.isConfirmed()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cart is already confirmed.");
+        }
+        OrderSession session = orderSessionRepository.findCartSession(cartId, sessionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Cart session not found."));
+        session.setCartId(null);
+        orderSessionRepository.save(session);
+        findActiveSession(sessionId).ifPresent(activeSession -> activeSession.setCartId(null));
+        removeSessionFromCart(cartId, sessionId);
+        return getCartMenuNames(cartId);
+    }
+
     @Transactional
     public OrderResponse process(OrderRequest request) {
         String sid = resolveId(request.getSessionId());
         OrderSession session = sessions.computeIfAbsent(sid, ignored -> newSession());
+        session.setClientSessionId(sid);
+        session.setCartId(resolveCartId(request.getCartId(), session));
+        ensureOpenCart(session.getCartId());
+        addSessionToCart(session.getCartId(), sid);
 
         if (request.getRestaurantId() != null) {
             session.setRestaurantId(request.getRestaurantId());
@@ -176,7 +243,7 @@ public class OrderService {
                 return confirmMenuAndStartOptionFilling(sid, intent, session, catalog);
             }
             return build(sid, intent, session,
-                    multiMenuConfirmationPrompt(session),
+                    menuConfirmationPrompt(session),
                     List.of("네", "아니요"),
                     List.of());
         }
@@ -195,7 +262,7 @@ public class OrderService {
 
         if (seedPendingMenusFromText(currentOptionText, session, catalog)) {
             return build(sid, intent, session,
-                    multiMenuConfirmationPrompt(session),
+                    menuConfirmationPrompt(session),
                     List.of("네", "아니요"),
                     List.of());
         }
@@ -280,7 +347,8 @@ public class OrderService {
 
         session.setStatus(OrderStatus.OPTION_FILLING);
         String pendingOptionText = session.getPendingOptionText();
-        if (pendingOptionText != null && !pendingOptionText.isBlank()
+        if (requiredPhase
+                && pendingOptionText != null && !pendingOptionText.isBlank()
                 && hasOptionSelection(pendingOptionText, catalog, session)) {
             session.setPendingOptionText(null);
             return handleOptionUtterance(sid, "ORDER", pendingOptionText, session, catalog);
@@ -290,7 +358,7 @@ public class OrderService {
                 requiredPhase
                         ? requiredOptionPrompt(session.getMenu(), activeSlots)
                         : optionalOptionListPrompt(session.getMenu(), optionalGroups),
-                requiredPhase ? quickRepliesForOptions(activeSlots, true) : quickRepliesForOptionalGroups(optionalGroups),
+                requiredPhase ? quickRepliesForRequiredPrompt(activeSlots) : quickRepliesForOptionalGroups(optionalGroups),
                 requiredPhase ? activeSlots : List.of());
     }
 
@@ -328,7 +396,9 @@ public class OrderService {
 
         Optional<OptionSelection> optionSelection = findOptionSelection(text, menu, selectableGroups);
         if (optionSelection.isPresent()) {
-            return askOptionSelectionConfirmation(sid, intent, session, menu, optionSelection.get());
+            applyConfirmedOptionSelection(session, menu, optionSelection.get().group(), optionSelection.get().item());
+            session.setPendingOptionalGroupId(null);
+            return continueAfterConfirmedOptionSelection(sid, "ORDER", session, menu);
         }
 
         Set<Long> selected = selectedOptionIds(session);
@@ -336,7 +406,7 @@ public class OrderService {
         if (!requiredSlots.isEmpty()) {
             return build(sid, intent, session,
                     requiredOptionPrompt(session.getMenu(), requiredSlots),
-                    quickRepliesForOptions(requiredSlots, true),
+                    quickRepliesForRequiredPrompt(requiredSlots),
                     requiredSlots);
         }
 
@@ -373,7 +443,9 @@ public class OrderService {
             if (session.getPendingOptionalGroupId() != null) {
                 Optional<OptionSelection> optionSelection = findOptionSelection(text, menu, List.of(group));
                 if (optionSelection.isPresent()) {
-                    return askOptionSelectionConfirmation(sid, intent, session, menu, optionSelection.get());
+                    applyConfirmedOptionSelection(session, menu, optionSelection.get().group(), optionSelection.get().item());
+                    session.setPendingOptionalGroupId(null);
+                    return continueAfterConfirmedOptionSelection(sid, "ORDER", session, menu);
                 }
 
                 OptionSlot optionSlot = optionSlotConverter.toOptionSlot(group, selectedOptionIds(session));
@@ -616,7 +688,7 @@ public class OrderService {
         if (!requiredSlots.isEmpty()) {
             return build(sid, intent, session,
                     requiredOptionPrompt(session.getMenu(), requiredSlots),
-                    quickRepliesForOptions(requiredSlots, true),
+                    quickRepliesForRequiredPrompt(requiredSlots),
                     requiredSlots);
         }
 
@@ -680,13 +752,8 @@ public class OrderService {
         session.setMenuId(firstMenu.menuId());
         session.setQuantity(1);
         session.setPendingOptionText(text);
-
-        menus.stream()
-                .skip(1)
-                .forEach(menu -> pendingMenuItems(session).addLast(
-                        new OrderSession.PendingMenuItem(menu.menuId(), menu.name(), 1, null, null)
-                ));
-        session.setStatus(OrderStatus.MENU_CONFIRMING);
+        pendingMenuItems(session).clear();
+        session.setStatus(OrderStatus.CONFIRMING);
         return true;
     }
 
@@ -702,10 +769,7 @@ public class OrderService {
         if (menus.isEmpty()) {
             return;
         }
-        List<OrderDraft.Item> items = menus.stream()
-                .map(menu -> toDraftItem(menu, text))
-                .toList();
-        session.setOrderDraft(new OrderDraft(items));
+        session.setOrderDraft(new OrderDraft(List.of(toDraftItem(menus.get(0), text))));
     }
 
     private OrderDraft.Item toDraftItem(MenuCacheResponse.MenuInfo menu, String sourceText) {
@@ -865,6 +929,7 @@ public class OrderService {
         if (missingOption.isPresent()) {
             DraftMissingOption missing = missingOption.get();
             hydrateSessionFromDraftItem(session, missing.item(), catalog);
+            session.setOrderDraft(null);
             session.setStatus(OrderStatus.OPTION_FILLING);
             OptionSlot optionSlot = optionSlotConverter.toOptionSlot(
                     missing.optionGroup(),
@@ -872,7 +937,7 @@ public class OrderService {
             );
             return Optional.of(build(sid, intent, session,
                     requiredOptionPrompt(missing.item().menuName(), List.of(optionSlot)),
-                    quickRepliesForOptions(List.of(optionSlot), true),
+                    quickRepliesForRequiredPrompt(List.of(optionSlot)),
                     List.of(optionSlot)));
         }
 
@@ -926,19 +991,6 @@ public class OrderService {
         }
 
         hydrateSessionFromDraftItem(session, items.get(0), catalog);
-        items.stream()
-                .skip(1)
-                .forEach(item -> pendingMenuItems(session).addLast(
-                        new OrderSession.PendingMenuItem(
-                                item.menuId(),
-                                item.menuName(),
-                                item.quantity() == null || item.quantity() < 1 ? 1 : item.quantity(),
-                                item.sourceText(),
-                                selectedOptionIdsFromDraft(item, findMenuById(item.menuId(), catalog)
-                                        .or(() -> findMenuByName(item.menuName(), catalog))
-                                        .orElse(null))
-                        )
-                ));
     }
 
     private void hydrateSessionFromDraftItem(
@@ -1447,11 +1499,13 @@ public class OrderService {
         Optional<String> defaultOptionName = defaultOptionName(slot);
         if (menuName != null && !menuName.isBlank()) {
             return defaultOptionName
-                    .map(defaultOption -> String.format("%s의 %s 옵션 기본 %s에서 변경하시겠어요?", menuName, optionName, defaultOption))
+                    .map(defaultOption -> String.format("%s %s 옵션 %s%s 드릴까요?",
+                            menuName, optionName, defaultOption, roParticle(defaultOption)))
                     .orElseGet(() -> String.format("%s의 필수 옵션 %s를 선택해주세요.", menuName, optionName));
         }
         return defaultOptionName
-                .map(defaultOption -> String.format("%s 옵션 기본 %s에서 변경하시겠어요?", optionName, defaultOption))
+                .map(defaultOption -> String.format("%s 옵션 %s%s 드릴까요?",
+                        optionName, defaultOption, roParticle(defaultOption)))
                 .orElse(optionName + " 옵션을 선택해주세요.");
     }
 
@@ -1461,6 +1515,18 @@ public class OrderService {
                 .map(OptionSlot.OptionCandidate::name)
                 .filter(name -> name != null && !name.isBlank())
                 .findFirst();
+    }
+
+    private String roParticle(String value) {
+        if (value == null || value.isBlank()) {
+            return "로";
+        }
+        char last = value.trim().charAt(value.trim().length() - 1);
+        if (last < '가' || last > '힣') {
+            return "로";
+        }
+        int jong = (last - '가') % 28;
+        return jong == 0 || jong == 8 ? "로" : "으로";
     }
 
     private String optionalOptionListPrompt(List<MenuCacheResponse.OptionGroupInfo> optionalGroups) {
@@ -1526,6 +1592,23 @@ public class OrderService {
             return replies;
         }
         return java.util.stream.Stream.concat(replies.stream().limit(7), java.util.stream.Stream.of("확인"))
+                .toList();
+    }
+
+    private List<String> quickRepliesForRequiredPrompt(List<OptionSlot> slots) {
+        List<String> replies = quickRepliesForOptions(slots, true);
+        boolean hasDefaultOption = slots.stream()
+                .flatMap(slot -> emptyIfNull(slot.candidates()).stream())
+                .anyMatch(candidate -> Boolean.TRUE.equals(candidate.defaultSelected()));
+        if (!hasDefaultOption) {
+            return replies;
+        }
+        return java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of("네"),
+                        replies.stream()
+                                .filter(reply -> !"네".equals(reply))
+                                .limit(7)
+                )
                 .toList();
     }
 
@@ -1611,6 +1694,65 @@ public class OrderService {
                 : sessionId;
     }
 
+    private String resolveCartId(String cartId, OrderSession session) {
+        if (cartId != null && !cartId.isBlank()) {
+            return cartId;
+        }
+        if (session.getCartId() != null && !session.getCartId().isBlank()) {
+            return session.getCartId();
+        }
+        return UUID.randomUUID().toString();
+    }
+
+    private void ensureOpenCart(String cartId) {
+        if (cartRepository == null || cartId == null || cartId.isBlank()) {
+            return;
+        }
+        Cart cart = cartRepository.findById(cartId)
+                .orElseGet(() -> cartRepository.save(Cart.builder()
+                        .id(cartId)
+                        .confirmed(false)
+                        .build()));
+        if (cart.isConfirmed()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cart is already confirmed.");
+        }
+    }
+
+    private void addSessionToCart(String cartId, String sessionId) {
+        if (cartId == null || cartId.isBlank() || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        List<String> sessionIds = cartSessions.computeIfAbsent(
+                cartId,
+                ignored -> Collections.synchronizedList(new ArrayList<>())
+        );
+        synchronized (sessionIds) {
+            if (!sessionIds.contains(sessionId)) {
+                sessionIds.add(sessionId);
+            }
+        }
+    }
+
+    private List<String> cartSessionIds(String cartId) {
+        List<String> sessionIds = cartSessions.get(cartId);
+        if (sessionIds == null) {
+            return List.of();
+        }
+        synchronized (sessionIds) {
+            return List.copyOf(sessionIds);
+        }
+    }
+
+    private void removeSessionFromCart(String cartId, String sessionId) {
+        List<String> sessionIds = cartSessions.get(cartId);
+        if (sessionIds == null) {
+            return;
+        }
+        synchronized (sessionIds) {
+            sessionIds.remove(sessionId);
+        }
+    }
+
     private boolean containsAny(String text, List<String> keywords) {
         return keywords.stream().anyMatch(text::contains);
     }
@@ -1646,6 +1788,8 @@ public class OrderService {
         session.setPreviousBotResponse(message);
         return orderResponseConverter().toResponse(
                 sid,
+                session.getCartId(),
+                cartSessionIds(session.getCartId()),
                 intent,
                 session,
                 message,

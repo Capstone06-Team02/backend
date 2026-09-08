@@ -12,6 +12,8 @@ public class OrderResponseConverter {
 
     public OrderResponse toResponse(
             String sessionId,
+            String cartId,
+            List<String> cartSessionIds,
             String intent,
             OrderSession session,
             String message,
@@ -23,6 +25,8 @@ public class OrderResponseConverter {
     ) {
         return OrderResponse.builder()
                 .sessionId(sessionId)
+                .cartId(cartId)
+                .cartSessionIds(cartSessionIds)
                 .intent(intent)
                 .response(message)
                 .slots(OrderResponse.SlotInfo.builder()
