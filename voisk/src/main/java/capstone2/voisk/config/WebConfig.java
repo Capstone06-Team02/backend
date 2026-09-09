@@ -13,6 +13,8 @@ public class WebConfig implements WebMvcConfigurer {
 				.allowedOriginPatterns(
 					"https://voisk-frontend.vercel.app",
 					"https://voisk-frontend-*-sungjae0309s-projects.vercel.app",
+					"https://voisk-admin.vercel.app",
+					"https://*.vercel.app",
 					"https://voisk.cloud",
 					"https://www.voisk.cloud",
 					"https://api.voisk.cloud",
