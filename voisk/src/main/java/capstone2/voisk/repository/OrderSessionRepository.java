@@ -12,7 +12,21 @@ import java.util.Optional;
 
 public interface OrderSessionRepository extends JpaRepository<OrderSession, Long> {
 
-    void deleteByUpdatedAtBefore(LocalDateTime threshold);
+    @Query("""
+            SELECT s
+            FROM OrderSession s
+            WHERE s.updatedAt < :threshold
+              AND (
+                    s.cartId IS NULL
+                    OR EXISTS (
+                        SELECT c.id
+                        FROM Cart c
+                        WHERE c.id = s.cartId
+                          AND c.confirmed = false
+                    )
+              )
+            """)
+    List<OrderSession> findExpiredUnconfirmedSessions(@Param("threshold") LocalDateTime threshold);
 
     @Query("""
             SELECT COALESCE(s.clientSessionId, s.id) AS sessionId,
