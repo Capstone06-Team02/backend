@@ -1,5 +1,6 @@
 package capstone2.voisk.service;
 
+import capstone2.voisk.entity.OrderSession;
 import capstone2.voisk.repository.OrderSessionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -22,7 +24,8 @@ public class SessionCleanupService {
     @Transactional
     public void deleteExpiredSessions() {
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(SESSION_TTL_MINUTES);
-        sessionRepository.deleteByUpdatedAtBefore(threshold);
+        List<OrderSession> expiredSessions = sessionRepository.findExpiredUnconfirmedSessions(threshold);
+        sessionRepository.deleteAll(expiredSessions);
         log.info("[SessionCleanup] {}분 이상 비활성 세션 삭제 완료", SESSION_TTL_MINUTES);
     }
 }
