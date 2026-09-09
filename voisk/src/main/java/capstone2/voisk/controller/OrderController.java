@@ -27,6 +27,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -105,8 +106,8 @@ public class OrderController {
             description = "특정 카트 주문의 제조 시작, 제조 완료 등 상태 변경 알림을 손님 화면으로 실시간 전송합니다."
     )
     @GetMapping(value = "/carts/{cartId}/status/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamCustomerOrderStatus(@PathVariable String cartId) {
-        return customerOrderSseService.subscribe(cartId);
+    public ResponseEntity<SseEmitter> streamCustomerOrderStatus(@PathVariable String cartId) {
+        return sseResponse(customerOrderSseService.subscribe(cartId));
     }
 
     @Operation(
@@ -114,8 +115,16 @@ public class OrderController {
             description = "특정 매장의 새 주문 접수와 주문 제조 상태 변경 알림을 사장님 화면으로 실시간 전송합니다."
     )
     @GetMapping(value = "/stores/{storeId}/orders/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamOwnerOrders(@PathVariable Long storeId) {
-        return ownerOrderSseService.subscribe(storeId);
+    public ResponseEntity<SseEmitter> streamOwnerOrders(@PathVariable Long storeId) {
+        return sseResponse(ownerOrderSseService.subscribe(storeId));
+    }
+
+    private ResponseEntity<SseEmitter> sseResponse(SseEmitter emitter) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                .header("X-Accel-Buffering", "no")
+                .body(emitter);
     }
 
     @Operation(
